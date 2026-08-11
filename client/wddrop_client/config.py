@@ -24,7 +24,7 @@ from .consent import ConsentState
 log = logging.getLogger("wddrop.config")
 
 APP_NAME = "wddrop"
-CLIENT_VERSION = "0.1.4"
+CLIENT_VERSION = "0.1.5"
 
 
 def config_dir() -> Path:

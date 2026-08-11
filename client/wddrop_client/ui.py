@@ -307,9 +307,22 @@ class ConsentPage(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(28, 26, 28, 26)
 
-        title = QtWidgets.QLabel(self.t("Before anything is recorded"))
+        # A RETURNING player is not a new one. Coming back to this page because the terms
+        # were edited looks identical to a first run otherwise, and a player who reads
+        # "before anything is recorded" on their tenth session reasonably concludes their
+        # data is gone. Say which it is, and what changed the answer they already gave.
+        again = bool(cfg.consent.accepted_hash) and not cfg.consent.general_ok
+        title = QtWidgets.QLabel(self.t("These terms have changed") if again
+                                 else self.t("Before anything is recorded"))
         title.setStyleSheet("font-size: 18px; font-weight: 600;")
         layout.addWidget(title)
+        if again:
+            changed = QtWidgets.QLabel(self.t(
+                "You agreed to an earlier version. Nothing you have already recorded is "
+                "affected — read this one and answer again, including whether you share."))
+            changed.setObjectName("hint")
+            changed.setWordWrap(True)
+            layout.addWidget(changed)
 
         text = QtWidgets.QTextBrowser()
         text.setMarkdown(self._disclaimer())
@@ -730,14 +743,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.timer.setInterval(STATS_INTERVAL_MS)
         self.timer.timeout.connect(self._refresh_stats)
 
-        if cfg.consent.accepted_hash:
+        # `general_ok`, NOT "is there a hash". They are different questions the moment the
+        # disclaimer text changes: acceptance is stored as a hash OF THE TEXT so that editing
+        # the terms re-prompts, and capture checks that hash matches. A window that skipped
+        # the disclaimer on any hash at all therefore never re-asked — and refused to start,
+        # with the player looking at a Settings page that said they had agreed.
+        if cfg.consent.general_ok:
             self.stack.setCurrentIndex(1)
         self._refresh_setup()
 
         # Anything the last run could not send — including how a session that ended by the
         # window being closed ended, which by definition had no chance to go then. Only in
         # per-record mode: "send when I press Upload" means exactly that.
-        if (cfg.consent.accepted_hash and cfg.share_uploads
+        if (cfg.consent.general_ok and cfg.share_uploads
                 and cfg.send_mode in AUTOMATIC_MODES):
             QtCore.QTimer.singleShot(0, lambda: self._upload(quiet=True))
 

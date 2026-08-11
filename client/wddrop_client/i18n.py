@@ -494,6 +494,21 @@ STRINGS: dict[str, dict[str, str]] = {
         "ja": "{sizes} の校正は内蔵済み。そのまま開始できます",
         "ko": "{sizes} 보정이 내장되어 있어 바로 시작할 수 있습니다",
         "de": "Kalibrierung für {sizes} ist enthalten — du kannst sofort starten"},
+    "These terms have changed": {
+        "zh_tw": "條款已更新", "zh_cn": "条款已更新", "ja": "規約が変更されました",
+        "ko": "약관이 변경되었습니다", "de": "Diese Bedingungen haben sich geändert"},
+    "You agreed to an earlier version. Nothing you have already recorded is affected — "
+    "read this one and answer again, including whether you share.": {
+        "zh_tw": "你先前同意的是舊版本。已經記錄的資料完全不受影響——請閱讀這一版並重新回答，"
+                 "包含是否分享。",
+        "zh_cn": "你先前同意的是旧版本。已经记录的数据完全不受影响——请阅读这一版并重新回答，"
+                 "包含是否分享。",
+        "ja": "以前のバージョンに同意されています。記録済みのデータには一切影響しません——"
+              "こちらを読んで、共有するかどうかも含めて改めてお答えください。",
+        "ko": "이전 버전에 동의하셨습니다. 이미 기록된 데이터에는 전혀 영향이 없습니다 — "
+              "이 내용을 읽고 공유 여부를 포함해 다시 답해 주세요.",
+        "de": "Du hast einer früheren Fassung zugestimmt. An deinen bereits aufgezeichneten "
+              "Daten ändert sich nichts — lies diese und antworte erneut, auch zum Teilen."},
     "Chests and veins": {
         "zh_tw": "寶箱與礦脈", "zh_cn": "宝箱与矿脉", "ja": "宝箱と鉱脈",
         "ko": "상자와 광맥", "de": "Truhen und Adern"},

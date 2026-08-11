@@ -775,3 +775,75 @@ def test_the_box_moving_on_a_break_is_not_treated_as_the_player_typing(app, home
 
     assert window.pickaxes.value() == 4
     assert not typed, "the break was reported as a manual edit"
+
+
+def test_terms_that_have_changed_are_asked_again_not_refused(app, home):
+    """Acceptance is stored as a hash OF THE DISCLAIMER, so editing the terms re-prompts
+    instead of inheriting agreement to something the player never read. That only works if
+    the window asks the same question capture does.
+
+    It did not: the window skipped the disclaimer whenever a hash was PRESENT, while capture
+    required it to MATCH. Rewriting the disclaimer put a real player in the gap — never shown
+    the new terms, refused on Start, and looking at a Settings page that said they agreed.
+    """
+    from wddrop_client.ui import MainWindow
+
+    cfg = make_config(accepted=True)
+    cfg.consent.accepted_hash = "0000000000000000"      # agreed to some older wording
+    window = MainWindow(cfg, data=home)
+
+    assert window.stack.currentIndex() == 0, "the new terms were never shown"
+
+
+def test_the_shell_opens_when_the_terms_are_the_ones_agreed_to(app, home):
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    assert window.stack.currentIndex() == 1
+
+
+def test_accepting_the_new_terms_gets_you_in(app, home):
+    """The other half: re-prompting is only right if answering it works."""
+    from wddrop_client.consent import disclaimer_hash
+    from wddrop_client.ui import MainWindow
+
+    cfg = make_config(accepted=True)
+    cfg.consent.accepted_hash = "0000000000000000"
+    window = MainWindow(cfg, data=home)
+
+    window.consent_page.agree.setChecked(True)
+    window.consent_page._accept()
+
+    assert window.cfg.consent.accepted_hash == disclaimer_hash()
+    assert window.cfg.consent.general_ok
+    assert window.stack.currentIndex() == 1
+
+
+def test_a_returning_player_is_told_the_terms_changed_not_greeted_as_new(app, home):
+    """Coming back because the wording was edited looks identical to a first run otherwise,
+    and "before anything is recorded" on someone's tenth session reads as "your data is
+    gone". Their existing sharing answer is shown, because they are updating it, not
+    choosing for the first time."""
+    from wddrop_client.ui import ConsentPage
+
+    cfg = make_config(accepted=True)
+    cfg.consent.accepted_hash = "0000000000000000"
+    cfg.share_uploads = True
+    page = ConsentPage(cfg)
+
+    labels = [w.text() for w in page.findChildren(QtWidgets.QLabel)]
+    assert any("changed" in text or "更新" in text or "変更" in text for text in labels)
+    assert any("already recorded" in text or "不受影響" in text for text in labels)
+    assert page.share.isChecked(), "their existing answer was not carried in"
+
+
+def test_a_first_run_is_not_told_anything_changed(app, home):
+    from wddrop_client.ui import ConsentPage
+
+    cfg = make_config(accepted=True)
+    cfg.consent.accepted_hash = None
+    # Held in a name: an unparented widget built inside the expression is collected before
+    # its children are read, and Qt then raises about an object it has already deleted.
+    page = ConsentPage(cfg)
+    labels = [w.text() for w in page.findChildren(QtWidgets.QLabel)]
+    assert not any("changed" in text for text in labels)
