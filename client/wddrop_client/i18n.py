@@ -494,6 +494,21 @@ STRINGS: dict[str, dict[str, str]] = {
         "ja": "{sizes} の校正は内蔵済み。そのまま開始できます",
         "ko": "{sizes} 보정이 내장되어 있어 바로 시작할 수 있습니다",
         "de": "Kalibrierung für {sizes} ist enthalten — du kannst sofort starten"},
+    "Chests and veins": {
+        "zh_tw": "寶箱與礦脈", "zh_cn": "宝箱与矿脉", "ja": "宝箱と鉱脈",
+        "ko": "상자와 광맥", "de": "Truhen und Adern"},
+    "Chests": {"zh_tw": "寶箱", "zh_cn": "宝箱", "ja": "宝箱", "ko": "상자", "de": "Truhen"},
+    "Veins": {"zh_tw": "礦脈", "zh_cn": "矿脉", "ja": "鉱脈", "ko": "광맥", "de": "Adern"},
+    "share": {"zh_tw": "佔比", "zh_cn": "占比", "ja": "割合", "ko": "비율", "de": "Anteil"},
+    "total of {n} kinds": {
+        "zh_tw": "合計（{n} 種）", "zh_cn": "合计（{n} 种）", "ja": "合計（{n} 種類）",
+        "ko": "합계({n}종)", "de": "Gesamt ({n} Arten)"},
+    "{n} openings gave this": {
+        "zh_tw": "來自 {n} 次開啟", "zh_cn": "来自 {n} 次开启", "ja": "{n} 回から",
+        "ko": "{n}회에서", "de": "aus {n} Öffnungen"},
+    "pickaxes broken": {
+        "zh_tw": "十字鎬損壞", "zh_cn": "十字镐损坏", "ja": "ツルハシ破損",
+        "ko": "곡괭이 파손", "de": "Spitzhacken zerbrochen"},
     "All days": {"zh_tw": "全部日期", "zh_cn": "全部日期", "ja": "すべての日", "ko": "전체 기간",
                  "de": "Alle Tage"},
     # The day divider is the GAME's, not the computer's, so the page says so rather than

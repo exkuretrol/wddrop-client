@@ -45,6 +45,10 @@ JST = timezone(timedelta(hours=9))
 
 # Provenance values that mean "one opening": one chest, or one mining panel.
 OPENING_KINDS = {"chest_direct", "mining", "junk_reversal"}
+# What a player thinks of as the SOURCE. Junk reversal is neither — it is a chest drop put
+# through a second step — so it is counted with chests, where it came from.
+VEIN_KINDS = {"mining"}
+SOURCES = ("chest", "vein")
 
 
 def jst_day(occurred_at: str) -> str:
@@ -75,8 +79,13 @@ def _events(path: Path | None):
 
 
 def _blank() -> dict:
-    return {"openings": 0, "chests": 0, "veins": 0, "lines": 0, "empty": 0,
+    return {"openings": 0, "chests": 0, "veins": 0, "lines": 0, "empty": 0, "broken": 0,
             "by_item": {}, "by_dungeon": {}, "first": "", "last": ""}
+
+
+def source_of(event: dict) -> str:
+    """Which of the two a record came from."""
+    return "vein" if event.get("provenance") in VEIN_KINDS else "chest"
 
 
 def _add(acc: dict, event: dict) -> None:
@@ -108,26 +117,45 @@ def _add(acc: dict, event: dict) -> None:
         row["inferred"] += bool(line.get("qty_unknown") or line.get("quantity_unknown"))
 
 
+def _shared(rows: list[dict]) -> list[dict]:
+    """Each row's share of everything counted, and of the largest row.
+
+    Two different numbers and both are wanted: the SHARE is what the row means, and the
+    fraction of the biggest is what makes a bar readable — scaling bars to the total leaves
+    a long tail of stripes too short to compare against each other.
+    """
+    total = sum(r["quantity"] for r in rows) or 1
+    top = max((r["quantity"] for r in rows), default=0) or 1
+    for row in rows:
+        row["share"] = row["quantity"] / total
+        row["of_top"] = row["quantity"] / top
+    return rows
+
+
 def _finish(acc: dict, extra: dict) -> dict:
     return {
         "openings": acc["openings"], "chests": acc["chests"], "veins": acc["veins"],
         "lines": acc["lines"], "empty": acc["empty"], "items": len(acc["by_item"]),
         "dungeons": dict(sorted(acc["by_dungeon"].items(), key=lambda kv: -kv[1])),
         "first": acc["first"], "last": acc["last"],
+        "broken": acc["broken"],
         # Most-seen first; ties broken by name so the order is stable between refreshes
         # rather than reshuffling under the reader.
-        "by_item": sorted(acc["by_item"].values(), key=lambda r: (-r["openings"], r["item"])),
+        "by_item": _shared(sorted(acc["by_item"].values(),
+                                  key=lambda r: (-r["quantity"], -r["openings"], r["item"]))),
+        "total_quantity": sum(r["quantity"] for r in acc["by_item"].values()),
         **extra,
     }
 
 
 def summarise(records: Path | None, spool: Path | None = None,
-              day: str | None = None) -> dict:
+              day: str | None = None, source: str | None = None) -> dict:
     """Everything the Stats page shows, from the player's own file.
 
-    `day` is a JST calendar day; None means every day there is. The OVERALL totals come back
-    either way, under "overall" — a day on its own says nothing about whether it was a good
-    one, and the comparison is the reason to offer days at all.
+    `day` is a JST calendar day; None means every day there is. `source` is "chest" or
+    "vein"; None means both. The OVERALL totals come back either way, under "overall" — a
+    day on its own says nothing about whether it was a good one, and the comparison is the
+    reason to offer days at all.
     """
     selected, overall = _blank(), _blank()
     days: dict[str, int] = {}
@@ -138,18 +166,36 @@ def summarise(records: Path | None, spool: Path | None = None,
         if event_id and event_id in seen_ids:
             continue
         seen_ids.add(event_id)
-        if event.get("provenance", "") not in OPENING_KINDS:
+        provenance = event.get("provenance", "")
+        when = jst_day(event.get("occurred_at", ""))
+        wanted_day = day is None or when == day
+
+        # A broken pickaxe is not an opening and gives nothing, so it is counted rather than
+        # aggregated. It is the denominator a player actually cares about for mining: how
+        # many pickaxes that ore cost.
+        if provenance == "marker" and "pickaxe" in str(event.get("note", "")):
+            overall["broken"] += 1
+            if wanted_day:
+                selected["broken"] += 1
+            continue
+        if provenance not in OPENING_KINDS:
+            continue
+        if source is not None and source_of(event) != source:
+            # Counted for the day list either way: the days a player can PICK must not
+            # change depending on which source they are looking at.
+            days[when] = days.get(when, 0) + 1
+            _add(overall, event)
             continue
 
-        when = jst_day(event.get("occurred_at", ""))
         days[when] = days.get(when, 0) + 1
         _add(overall, event)
-        if day is None or when == day:
+        if wanted_day:
             _add(selected, event)
 
     return _finish(selected, {
         "unsent": sum(1 for _ in _events(spool)),
         "day": day,
+        "source": source,
         # Newest first: the day a player wants is almost always the one they just played.
         "days": [{"day": d, "openings": n} for d, n in sorted(days.items(), reverse=True) if d],
         "overall": _finish(overall, {}),

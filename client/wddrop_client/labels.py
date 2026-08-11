@@ -66,8 +66,14 @@ class DungeonHints:
         catalog_path = Path(catalog_path) if catalog_path else \
             vocab_path.parent / f"catalog.{locale}.json"
         if not catalog_path.exists():
-            log.debug("wddrop: no catalogue beside %s; dungeon cross-check disabled", vocab_path)
-            return cls({}, set())
+            # The built-in list, not nothing. These are the dungeons whose junk carries their
+            # own name, which is exactly what this check matches on — so without a catalogue
+            # file the cross-check still works for every dungeon it could ever have caught.
+            from .dungeons import STUDY_DUNGEONS
+
+            junk = {e["name"] for e in vocab.get("items", [])
+                    if e.get("name") and e.get("type") == "Item::Junk"}
+            return cls(dict(STUDY_DUNGEONS), junk)
         catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
         dungeons = {d["id"]: d["name"] for d in catalog.get("dungeons", []) if d.get("name")}
         # ONLY junk. Every item that names a dungeon is Item::Junk (checked across all six

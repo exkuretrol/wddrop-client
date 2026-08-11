@@ -43,13 +43,14 @@ HERE = Path(__file__).resolve().parent
 
 # Everything the client looks for beside itself at runtime, and what it costs to omit each.
 DATA = [
-    ("DISCLAIMER.md", "the terms the player agrees to — the FIRST thing the window shows"),
-    ("profiles.shipped.json", "the verified calibrations — without it every player calibrates"),
-    ("vocab.zh_tw.json", "the item names — without it nothing can be recognised at all"),
-    ("catalog.zh_tw.json", "the dungeon list for the picker, and the window will not start "
-                           "without it"),
-    ("atlas.zh_tw.json", "the glyph atlas index"),
-    ("atlas.zh_tw.png", "the glyph atlas sheet"),
+    ("DISCLAIMER.md", "the terms the player agrees to — the FIRST thing the window shows", True),
+    ("profiles.shipped.json", "the verified calibrations — without it every player calibrates", True),
+    ("vocab.zh_tw.json", "the item names — without it nothing can be recognised at all", True),
+    # OPTIONAL, and listed so the build says so: the dungeon list is built into the client
+    # (wddrop_client/dungeons.py) and a file only overrides it.
+    ("catalog.zh_tw.json", "a fuller dungeon list than the one built in", False),
+    ("atlas.zh_tw.json", "the glyph atlas index", True),
+    ("atlas.zh_tw.png", "the glyph atlas sheet", True),
 ]
 ATLAS = {"atlas.zh_tw.json", "atlas.zh_tw.png"}
 
@@ -136,8 +137,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--console", action="store_true", help="keep a console window for logs")
     args = ap.parse_args(argv)
 
-    wanted = [(name, why) for name, why in DATA if not (args.no_atlas and name in ATLAS)]
-    missing = [f"    {name:<24} {why}" for name, why in wanted if not (HERE / name).exists()]
+    wanted = [(name, why, need) for name, why, need in DATA
+              if not (args.no_atlas and name in ATLAS) and ((HERE / name).exists() or need)]
+    missing = [f"    {name:<24} {why}" for name, why, need in wanted
+               if need and not (HERE / name).exists()]
     if missing:
         print("[!] these have to be built before the exe can be:\n" + "\n".join(missing))
         print("\n    tools/build_vocab.py, build_catalog.py, build_atlas.py make them.")
@@ -179,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
     icon = HERE / "client" / "wddrop_client" / "icon.png"
     if icon.exists():
         cmd += ["--icon", str(icon)]
-    for name, _why in wanted:
+    for name, _why, _need in wanted:
         cmd += ["--add-data", f"{HERE / name}{';' if _windows() else ':'}."]
     if icon.exists():
         cmd += ["--add-data", f"{icon}{';' if _windows() else ':'}wddrop_client"]

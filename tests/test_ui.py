@@ -391,8 +391,12 @@ def test_the_stats_page_reads_the_players_copy(app, home):
 
     window = MainWindow(make_config(accepted=True), data=home)
     window._show_page(1)
-    assert window.stats_table.rowCount() == 1
+    # The item, and the TOTAL row under it — a column of shares does not read without the
+    # number they are shares of.
+    assert window.stats_table.rowCount() == 2
     assert window.stats_table.item(0, 0).text() == "莫尼翁銀幣"
+    assert window.stats_table.item(0, 1).text() == "×2"
+    assert window.stats_table.item(0, 2).text() == "100.0%"
     assert "1" in window.stats_headline.text()
 
 
@@ -648,8 +652,10 @@ def test_the_stats_page_offers_the_days_recorded_and_keeps_the_overall(app, home
 
     # Pick the older day: the table narrows, the all-time line does not.
     window.stats_day.setCurrentIndex(window.stats_day.findData("2026-08-10"))
-    assert window.stats_table.rowCount() == 1
+    # One item, plus the TOTAL row the page ends with.
+    assert window.stats_table.rowCount() == 2
     assert window.stats_table.item(0, 0).text() == "X"
+    assert window.stats_table.item(1, 1).text() == "×2"
     assert "2" in window.stats_overall.text(), "the all-time total followed the filter"
 
 

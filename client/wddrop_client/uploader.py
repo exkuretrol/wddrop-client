@@ -198,3 +198,20 @@ def upload_spool(cfg: ClientConfig, mode: CaptureMode, *, spool: Path | None = N
     closed = drain_closes(cfg)
     return {"uploaded": uploaded, "remaining": remaining, "rejected": rejected,
             "closed": closed}
+
+
+def record_marker(marker: dict, path=None) -> None:
+    """Keep a marker in the player's own file, and NOT in the outbox.
+
+    A broken pickaxe is a fact about their session, not an observation to pool: it carries no
+    contents, the server has no column for it, and `install_id` is not involved. So it goes
+    to the records file only — which is also the file nothing drains, so the count survives
+    the window closing. Held in memory instead, as it was, "pickaxes broken" could only ever
+    mean "since you opened this window".
+    """
+    from .config import records_path
+
+    target = Path(path) if path else records_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(marker, ensure_ascii=False) + "\n")

@@ -43,6 +43,7 @@ from types import SimpleNamespace
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from . import theme
 from .config import (AUTOMATIC_MODES, CLIENT_VERSION, SEND_BATCH, SEND_EACH, SEND_MANUAL,
@@ -144,7 +145,7 @@ class CaptureWorker(QtCore.QThread):
             return
         reason = runner.stop_reason or "game_closed"
         from .runner import record_stop_reason
-        from .uploader import record_close
+        from .uploader import record_marker, record_close
 
         # Stamp both copies: the outbox, for events that have not gone yet, and the
         # player's own file, so their export says the same thing the server was told.
@@ -595,6 +596,31 @@ class Combo(QtWidgets.QComboBox):
         theme.square_corners(self.view().window())
 
 
+class ShareBar(QtWidgets.QStyledItemDelegate):
+    """A bar drawn in the cell, from a 0..1 in the item's data.
+
+    Painted rather than assembled from widgets: a table of thirty rows with a widget each
+    rebuilds them on every refresh, and painting is what a table already does. No image is
+    involved — the game's own icons are its artwork, and this page is not going to carry it.
+    """
+
+    def paint(self, painter, option, index) -> None:                # noqa: N802 (Qt)
+        fraction = index.data(QtCore.Qt.UserRole)
+        super().paint(painter, option, index)
+        if not isinstance(fraction, float):
+            return
+        room = option.rect.adjusted(6, 0, -6, 0)
+        height = 4
+        top = room.center().y() - height // 2
+        painter.save()
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(QtGui.QColor(theme.RULE))
+        painter.drawRect(room.left(), top, room.width(), height)
+        painter.setBrush(QtGui.QColor(theme.INK))
+        painter.drawRect(room.left(), top, max(1, int(room.width() * fraction)), height)
+        painter.restore()
+
+
 class WheelGuard(QtCore.QObject):
     """Stops the wheel editing a control the player is only scrolling past.
 
@@ -900,25 +926,40 @@ class MainWindow(QtWidgets.QMainWindow):
         pick = QtWidgets.QHBoxLayout()
         pick.setSpacing(8)
         self.stats_day = Combo()
-        self.stats_day.setMinimumWidth(200)
+        self.stats_day.setMinimumWidth(180)
         self._no_wheel(self.stats_day)
         self.stats_day.currentIndexChanged.connect(self._refresh_stats_page)
         pick.addWidget(self.stats_day)
+
+        # Chests and veins are different questions. Pooling them puts 582 pebbles beside 32
+        # shells and calls the result a distribution.
+        self.stats_source = Combo()
+        self.stats_source.setMinimumWidth(140)
+        self._no_wheel(self.stats_source)
+        for label, value in ((self.t("Chests and veins"), None),
+                             (self.t("Chests"), "chest"), (self.t("Veins"), "vein")):
+            self.stats_source.addItem(label, value)
+        self.stats_source.currentIndexChanged.connect(self._refresh_stats_page)
+        pick.addWidget(self.stats_source)
         self.stats_overall = QtWidgets.QLabel("")
         self.stats_overall.setObjectName("hint")
         pick.addWidget(self.stats_overall, 1)
+        self.stats_pickaxes = QtWidgets.QLabel("")
+        self.stats_pickaxes.setObjectName("hint")
+        hl.addWidget(self.stats_pickaxes)
         hl.addLayout(pick)
         layout.addWidget(head)
 
-        self.stats_table = QtWidgets.QTableWidget(0, 3)
+        self.stats_table = QtWidgets.QTableWidget(0, 4)
         self.stats_table.setHorizontalHeaderLabels(
-            [self.t("what it recorded"), self.t("openings"), self.t("total")])
+            [self.t("what it recorded"), self.t("total"), self.t("share"), ""])
+        self.stats_table.setItemDelegateForColumn(3, ShareBar(self.stats_table))
         self.stats_table.horizontalHeader().setStretchLastSection(False)
         self.stats_table.horizontalHeader().setSectionResizeMode(
             0, QtWidgets.QHeaderView.Stretch)
         self.stats_table.horizontalHeader().setDefaultAlignment(
             QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        for column, width in ((1, 90), (2, 90)):
+        for column, width in ((1, 90), (2, 80), (3, 170)):
             self.stats_table.setColumnWidth(column, width)
         # Right-aligned headers over right-aligned numbers, so the eye scans one edge.
         for column in (1, 2):
@@ -984,7 +1025,8 @@ class MainWindow(QtWidgets.QMainWindow):
         from .stats import summarise
 
         chosen = self.stats_day.currentData()
-        data = summarise(records_path(), spool_path(), day=chosen)
+        data = summarise(records_path(), spool_path(), day=chosen,
+                         source=self.stats_source.currentData())
         self._fill_days(data, chosen)
         names = self._place_names()
 
@@ -997,6 +1039,17 @@ class MainWindow(QtWidgets.QMainWindow):
             f"{data['openings']} {self.t('openings')} · "
             f"{data['chests']} {self.t('chest')} · {data['veins']} {self.t('vein')} · "
             f"{data['lines']} {self.t('item lines')}")
+        # What the ore cost. A share of the ore says nothing without it, and it is the one
+        # number a player cannot reconstruct afterwards from the items alone.
+        # Only where it means something. Pickaxes are a mining cost, and on the chest view
+        # the number is true but answers a question nobody asked there.
+        broken, veins = data["broken"], data["veins"]
+        looking_at_veins = self.stats_source.currentData() in (None, "vein")
+        if looking_at_veins and (broken or veins):
+            share = f" ({broken / veins * 100:.1f}%)" if veins else ""
+            self.stats_pickaxes.setText(f"{self.t('pickaxes broken')} ×{broken}{share}")
+        else:
+            self.stats_pickaxes.setText("")
 
         detail = []
         if data["dungeons"]:
@@ -1017,13 +1070,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stats_detail.setText("   ".join(detail))
 
         rows = data["by_item"]
-        self.stats_table.setRowCount(len(rows))
+        # CLEARED, not just resized. Shrinking a table leaves the cells that were there —
+        # switching from every source to veins alone left the previous row's share and bar
+        # sitting on the TOTAL line, which read as a total having a percentage of itself.
+        self.stats_table.clearContents()
+        # A TOTAL row at the end, as the game's own tally screen has: a column of shares is
+        # not readable without the number they are shares OF.
+        self.stats_table.setRowCount(len(rows) + (1 if rows else 0))
         for index, row in enumerate(rows):
-            for column, value in enumerate((row["item"], row["openings"], row["quantity"])):
-                cell = QtWidgets.QTableWidgetItem(str(value))
+            cells = (row["item"], f"×{row['quantity']}", f"{row['share'] * 100:.1f}%", "")
+            for column, value in enumerate(cells):
+                cell = QtWidgets.QTableWidgetItem(value)
                 if column:
                     cell.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+                if column == 3:
+                    cell.setData(QtCore.Qt.UserRole, float(row["of_top"]))
+                    cell.setToolTip(self.t("{n} openings gave this", n=row["openings"]))
                 self.stats_table.setItem(index, column, cell)
+        if rows:
+            total = QtWidgets.QTableWidgetItem(
+                self.t("total of {n} kinds", n=len(rows)))
+            total.setForeground(QtGui.QColor(theme.VELLUM))
+            amount = QtWidgets.QTableWidgetItem(f"×{data['total_quantity']}")
+            amount.setForeground(QtGui.QColor(theme.VELLUM))
+            amount.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            self.stats_table.setItem(len(rows), 0, total)
+            self.stats_table.setItem(len(rows), 1, amount)
 
         note = [self.t("Counted from what was recorded on this computer, not from what was "
                        "sent. These are counts, not drop rates.")]
@@ -1276,7 +1348,10 @@ class MainWindow(QtWidgets.QMainWindow):
             "atlas": find_data("atlas.{locale}.json", locale),
             "catalogue": find_data("catalog.{locale}.json", locale),
         }
-        missing = [name for name, path in found.items() if path is None]
+        # The catalogue is OPTIONAL — the dungeon list is built in, and a file only overrides
+        # it. The other two are not: without them nothing can be recognised at all.
+        missing = [name for name, path in found.items()
+                   if path is None and name != "catalogue"]
         self.data_label.setText(
             "\n".join(f"{name}: {path.name}  ({path.parent})"
                       for name, path in found.items() if path)
@@ -1323,9 +1398,16 @@ class MainWindow(QtWidgets.QMainWindow):
         # "I chose the first entry" produce identical data, and five real chests were
         # mislabelled exactly that way.
         self.dungeon.addItem(f"— {self.t('Choose the dungeon you are in')} —", None)
-        self._catalog = []
+        # The file if there is one, the built-in list otherwise. It used to be the file or
+        # NOTHING, which made a generated file a hard dependency of a client that otherwise
+        # only reads the screen — and an empty picker blocks recording entirely.
+        from .dungeons import catalog as built_in
+
+        self._catalog = built_in()
         if path is not None:
-            self._catalog = json.loads(path.read_text(encoding="utf-8")).get("dungeons", [])
+            self._catalog = json.loads(path.read_text(encoding="utf-8")).get("dungeons",
+                                                                            self._catalog)
+        if True:
             for d in self._catalog:
                 # The name only. The id is what the data is filed under, not something the
                 # player picking a dungeon has any use for.
@@ -1544,7 +1626,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """A note to yourself, kept out of the data that is sent."""
         self._add_row(self._elapsed(), "", self.t("next dive"), marker=True)
         self.markers.append({
-            "event_id": f"marker-{len(self.markers) + 1}",
+            "event_id": f"marker-{uuid4()}",
             "occurred_at": datetime.now(timezone.utc).isoformat(),
             "provenance": "marker", "note": self.t("next dive"), "contents": [],
             "dive": {"dungeon_id": self.dungeon.currentData(),
@@ -1563,12 +1645,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self._spend_a_pickaxe()
         self._add_row(self._elapsed(), "",
                       f"{self.t('A pickaxe broke')} — {self.cfg.pickaxes}", marker=True)
-        self.markers.append({
-            "event_id": f"marker-{len(self.markers) + 1}",
+        marker = {
+            "event_id": f"marker-{uuid4()}",
             "occurred_at": datetime.now(timezone.utc).isoformat(),
             "provenance": "marker", "note": "pickaxe broke", "contents": [],
             "dive": {"dungeon_id": self.dungeon.currentData()},
-        })
+        }
+        self.markers.append(marker)
+        # To the player's own file as well, not only to this window's list. A pickaxe broken
+        # is the denominator for everything mining — how many ore that pickaxe cost — and
+        # kept in memory it was gone when the window closed, so the count could never be
+        # anything but "this session". The event id is a uuid for the same reason every other
+        # record has one: two sessions both starting at marker-1 would collide.
+        from .uploader import record_marker
+
+        record_marker(marker)
         self._refresh_pickaxes()
 
     def _spend_a_pickaxe(self) -> None:

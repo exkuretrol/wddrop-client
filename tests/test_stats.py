@@ -17,6 +17,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "client"))
 sys.path.insert(0, str(ROOT / "packages" / "schema"))
@@ -210,3 +212,72 @@ def test_a_repeated_event_is_counted_once_on_its_day(tmp_path):
     path = _written(tmp_path, [one, dict(one)])
     data = summarise(path)
     assert data["openings"] == 1 and data["days"][0]["openings"] == 1
+
+
+# -- chests and veins are different questions -------------------------------------------
+
+def _mined(when: str, items):
+    return {"event_id": when + "mining", "provenance": "mining", "occurred_at": when,
+            "dive": {"dungeon_id": 7015},
+            "contents": [{"item_name": n, "quantity": q} for n, q in items]}
+
+
+def _broke(when: str, n: int = 1):
+    return [{"event_id": f"marker-{when}-{i}", "provenance": "marker",
+             "note": "pickaxe broke", "occurred_at": when, "contents": []} for i in range(n)]
+
+
+def test_the_two_sources_are_countable_apart(tmp_path):
+    """Pooling them puts 582 pebbles beside 32 shells and calls the result a distribution."""
+    from wddrop_client.stats import summarise
+
+    path = _written(tmp_path, [
+        _record("2026-08-10T01:00:00+00:00", items=("shell",)),
+        _mined("2026-08-10T02:00:00+00:00", [("pebble", 9), ("ore", 3)]),
+    ])
+    both, chest, vein = (summarise(path, source=s) for s in (None, "chest", "vein"))
+    assert (both["openings"], chest["openings"], vein["openings"]) == (2, 1, 1)
+    assert {r["item"] for r in chest["by_item"]} == {"shell"}
+    assert {r["item"] for r in vein["by_item"]} == {"pebble", "ore"}
+    assert vein["total_quantity"] == 12
+
+
+def test_a_share_is_of_what_was_counted_not_of_everything(tmp_path):
+    """Filtered to veins, a pebble's share is its share OF THE ORE — otherwise the number
+    changes meaning depending on a dropdown, which is worse than not showing it."""
+    from wddrop_client.stats import summarise
+
+    path = _written(tmp_path, [
+        _record("2026-08-10T01:00:00+00:00", items=("shell",)),
+        _mined("2026-08-10T02:00:00+00:00", [("pebble", 3), ("ore", 1)]),
+    ])
+    vein = summarise(path, source="vein")
+    shares = {r["item"]: round(r["share"], 3) for r in vein["by_item"]}
+    assert shares == {"pebble": 0.75, "ore": 0.25}
+    assert [r["of_top"] for r in vein["by_item"]] == [1.0, pytest.approx(1 / 3)]
+
+
+def test_broken_pickaxes_are_counted_and_are_not_openings(tmp_path):
+    """A break gives nothing, so it must not enter the item table or the opening count — but
+    it is the denominator for everything mining, so it has to be counted somewhere."""
+    from wddrop_client.stats import summarise
+
+    path = _written(tmp_path, [_mined("2026-08-10T02:00:00+00:00", [("ore", 3)])]
+                    + _broke("2026-08-10T02:30:00+00:00", 2))
+    data = summarise(path)
+    assert data["broken"] == 2
+    assert data["openings"] == 1
+    assert [r["item"] for r in data["by_item"]] == ["ore"]
+
+
+def test_the_days_offered_do_not_change_with_the_source(tmp_path):
+    """The days a player can PICK must not depend on which source they are looking at, or
+    choosing "veins" makes a day they mined nothing disappear from the list."""
+    from wddrop_client.stats import summarise
+
+    path = _written(tmp_path, [
+        _record("2026-08-10T01:00:00+00:00"),
+        _mined("2026-08-11T01:00:00+00:00", [("ore", 1)]),
+    ])
+    days = [[r["day"] for r in summarise(path, source=s)["days"]] for s in (None, "chest", "vein")]
+    assert days[0] == days[1] == days[2] == ["2026-08-11", "2026-08-10"]

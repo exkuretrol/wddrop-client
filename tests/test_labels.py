@@ -97,13 +97,34 @@ def test_agreement_records_the_hint_without_a_conflict(hints):
     assert hints.check(7015, ["北穿幽靈城的四鱗雜物"]) == {"contents_dungeon_id": 7015}
 
 
-def test_a_missing_catalogue_disables_the_check_rather_than_failing(tmp_path):
-    """The cross-check is an extra. A client without a catalogue must still capture."""
+def test_the_check_survives_a_missing_catalogue(tmp_path):
+    """A client without a catalogue file must still capture — and now still CHECK.
+
+    The dungeon list is built into the client, and it is exactly the dungeons whose junk
+    carries their own name, which is what this matches on. So the file being absent costs
+    nothing that this check could ever have caught.
+    """
+    from wddrop_client.dungeons import STUDY_DUNGEONS
+
+    (tmp_path / "vocab.zh_tw.json").write_text(json.dumps({
+        "locale": "zh_tw", "equipment": [],
+        "items": [{"name": "北穿幽靈城的乳白色雜物", "type": "Item::Junk"}],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    hints = DungeonHints.load(tmp_path / "vocab.zh_tw.json")
+    assert len(hints) == len(STUDY_DUNGEONS)
+    # The junk names one dungeon and the label says another: that is the whole point of it.
+    assert hints.check(2000, ["北穿幽靈城的乳白色雜物"]) == {
+        "contents_dungeon_id": 7015, "label_conflict": True}
+    # And agreeing still records the hint, as it does with a catalogue file.
+    assert hints.check(7015, ["北穿幽靈城的乳白色雜物"]) == {"contents_dungeon_id": 7015}
+
+
+def test_a_vocabulary_with_no_junk_finds_nothing_to_check(tmp_path):
+    """The check needs both halves. Names alone match nothing."""
     (tmp_path / "vocab.zh_tw.json").write_text(
         json.dumps({"locale": "zh_tw", "items": [], "equipment": []}), encoding="utf-8")
-    empty = DungeonHints.load(tmp_path / "vocab.zh_tw.json")
-    assert len(empty) == 0
-    assert empty.check(2000, ["anything"]) == {}
+    assert DungeonHints.load(tmp_path / "vocab.zh_tw.json").check(2000, ["anything"]) == {}
 
 
 # -- against the real data --------------------------------------------------------
