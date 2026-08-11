@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "pillow>=10",
+#     "numpy>=1.26",
+#     "mss>=9.0",
+#     "pydantic>=2.7",
+#     "httpx>=0.27",
+# ]
+# ///
+"""
+Launcher — run this instead of `python -m wddrop_client`.
+
+    uv run wddrop.py calibrate --drop-shot drop.png --name "初始的雜物" ...
+    uv run wddrop.py replay frames\\ --dungeon 2000
+    uv run wddrop.py run --dungeon 2000
+
+For the window instead of the command line, add the GUI toolkit for that run only:
+
+    uv run --with PySide6-Essentials wddrop.py ui
+
+PySide6 is deliberately NOT in the dependency list below: it is ~80 MB, and the capture
+path must not become unusable on a machine where a GUI toolkit will not install.
+
+Why this file exists: the client is two packages sitting side by side (`client/` and
+`packages/schema/`) rather than something installed, so `python -m wddrop_client` only works
+if PYTHONPATH is set first — and forgetting that produces a bare "No module named
+wddrop_client" that says nothing about the cause. This puts both packages on sys.path itself,
+so there is no environment to get wrong.
+
+The PEP 723 header above means `uv run wddrop.py` also installs the dependencies on first
+run. With plain `python wddrop.py` you install them yourself:
+
+    py -m pip install pillow numpy mss pydantic httpx
+"""
+from __future__ import annotations
+
+import os
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+
+for pkg in (HERE / "client", HERE / "packages" / "schema"):
+    if not pkg.is_dir():
+        sys.exit(
+            f"[!] missing {pkg}\n"
+            f"    Run this from the wddrop folder, next to client/ and packages/."
+        )
+    sys.path.insert(0, str(pkg))
+
+# State used to land beside this script. It now lives in one per-user folder — see
+# config.config_dir for why — so anything left over is moved across once, before anything
+# reads it. WDDROP_HOME still wins, which is what the tests use.
+try:
+    from wddrop_client.config import migrate_state
+
+    _moved = migrate_state(HERE)
+    if _moved:
+        print(f"[=] moved {len(_moved)} file(s) to your data folder: {', '.join(_moved)}")
+except Exception:                        # a failed move must never stop the client opening
+    pass
+
+if __name__ == "__main__":
+    try:
+        from wddrop_client.__main__ import main
+    except ImportError as exc:  # a dependency, not a path problem
+        sys.exit(
+            f"[!] {exc}\n"
+            f"    Install the dependencies:  py -m pip install pillow numpy mss pydantic httpx\n"
+            f"    or run through uv, which does it for you:  uv run wddrop.py --help"
+        )
+    raise SystemExit(main())

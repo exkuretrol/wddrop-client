@@ -1,0 +1,22 @@
+# session-20260809-034520 — 704x1241, 16 fps, dungeon 7015
+#
+# Transcribed from the recorded frames, NOT confirmed by the player: every settled state of
+# the message band was rendered as a contact sheet and read by eye. Every run of inked
+# frames that ended WITHOUT the line ever holding still was read too (104 of 117 runs), to
+# check for a message the recogniser could have missed — all of them turned out to be party
+# HUD, the character-name bar or scene glare, and none of them a drop.
+#
+# What this evidence cannot do: it only sees what the capture caught. A message shown and
+# dismissed between two samples is absent from the frames as well, so this transcript can
+# never rule that out. Only a player who was there can.
+#
+# Quantities are written exactly as the screen showed them: no "xN" means the game printed
+# no number, which is normal for a single item, for equipment, and under a drop boost.
+
+session-20260809-034520#1: 莫尼翁銀幣 x2; 北穿幽靈城的四鱗雜物
+session-20260809-034520#2: 大暴雪符咒; 100拜恩紙幣 x2; 北穿幽靈城的妖異冥刻雜物
+session-20260809-034520#3: 朗佩爾金幣
+session-20260809-034520#4: 高級治療劑; 朗佩爾金幣; 北穿幽靈城的乳白色雜物 x3
+session-20260809-034520#5: 莫尼翁銀幣 x2; 北穿幽靈城的妖異乳白色雜物
+session-20260809-034520#6: 倫戈南戈翠貝殼幣 x2; 北穿幽靈城的妖異冥刻雜物 x3
+session-20260809-034520#7: 高級治療劑; 100拜恩紙幣 x2; 北穿幽靈城的乳白色雜物 x2

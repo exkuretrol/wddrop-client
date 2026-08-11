@@ -1,0 +1,28 @@
+# generated data — not distributed with the client
+vocab.*.json
+catalog.*.json
+boosts.json
+atlas.*.json
+atlas.*.png
+
+# build output
+dist/
+build/
+*.spec
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+# player state, if anyone runs from a checkout
+config.json
+spool.jsonl
+records.jsonl
+closes.jsonl
+profile.json
+profiles.json
+capture/
+tests/local.env

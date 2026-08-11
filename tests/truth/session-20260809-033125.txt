@@ -1,0 +1,14 @@
+# session-20260809-033125 — 704x1241, 15 fps, dungeon 7015
+#
+# Transcribed from the recorded frames, NOT confirmed by the player — see the header of
+# session-20260809-034520.txt for what that evidence can and cannot establish. 104 of 128
+# inked runs here ended without the line settling; every one was read and none was a drop.
+
+session-20260809-033125#1: 大巨岩符咒; 10,000拜恩紙幣; 北穿幽靈城的妖異冥刻雜物 x3
+session-20260809-033125#2: 10,000拜恩紙幣; 北穿幽靈城的妖異四鱗雜物
+session-20260809-033125#3: 莫尼翁銀幣 x2; 北穿幽靈城的乳白色雜物 x3
+session-20260809-033125#4: 倫戈南戈翠貝殼幣 x2; 北穿幽靈城的妖異冥刻雜物 x2
+session-20260809-033125#5: 高級治療劑; 聖劍碎片 x5
+session-20260809-033125#6: 100拜恩紙幣 x2; 北穿幽靈城的妖異乳白色雜物 x3
+session-20260809-033125#7: 大巨岩符咒; 倫戈南戈翠貝殼幣 x2; 北穿幽靈城的妖異乳白色雜物 x2
+session-20260809-033125#8: 朗佩爾金幣
