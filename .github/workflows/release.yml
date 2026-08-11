@@ -28,9 +28,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The vocabulary, catalogue and glyph atlas are NOT in this repository. The atlas is a
-      # rendering of the game's own font and the vocabulary comes from the game's own data,
-      # so they live in a private repository and are fetched only for the build.
+      # The three files the client needs and this repository does not carry:
+      #
+      #   vocab.<locale>.json     the item names, from the game's own item table
+      #   catalog.<locale>.json   the dungeon and floor names, from the game's own assets
+      #   atlas.zh_tw.json/.png   the glyphs, rendered from the game's own font
+      #
+      # All three are derived from the game rather than written here, so they live in a
+      # private repository and are fetched only for the length of the build. boosts.json is
+      # NOT among them: the client has never read it, it belongs to the server.
       - name: Fetch the data files
         uses: actions/checkout@v4
         with:

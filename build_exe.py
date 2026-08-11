@@ -14,9 +14,13 @@ WHAT ENDS UP INSIDE
 -------------------
     wddrop_client, wddrop_schema     the two packages, which are path imports rather than
                                      installed distributions
-    vocab / catalog / boosts         per locale, built by tools/
+    vocab.<locale>.json              the item names the reader matches against
+    catalog.<locale>.json            the dungeon and floor names the picker shows
     atlas.zh_tw.json + .png          the rendered glyphs — SEE THE LICENCE NOTE
     profiles.shipped.json            the calibrations that were verified against recordings
+
+NOT boosts.json. The client has never read it — it is the server's, and it was bundled here
+by mistake, which is the kind of thing an allow-list of files quietly preserves forever.
 
 THE ATLAS IS A RASTERISATION OF THE GAME'S OWN FONT
 ---------------------------------------------------
@@ -42,8 +46,8 @@ DATA = [
     ("DISCLAIMER.md", "the terms the player agrees to — the FIRST thing the window shows"),
     ("profiles.shipped.json", "the verified calibrations — without it every player calibrates"),
     ("vocab.zh_tw.json", "the item names — without it nothing can be recognised at all"),
-    ("catalog.zh_tw.json", "the dungeon list for the picker"),
-    ("boosts.json", "the boost calendar"),
+    ("catalog.zh_tw.json", "the dungeon list for the picker, and the window will not start "
+                           "without it"),
     ("atlas.zh_tw.json", "the glyph atlas index"),
     ("atlas.zh_tw.png", "the glyph atlas sheet"),
 ]
@@ -79,7 +83,7 @@ def entry_script(target: Path) -> Path:
         "    print('bundled at :', bundled_dir())",
         "    ok = True",
         "    for pattern in ('vocab.{locale}.json', 'atlas.{locale}.json',",
-        "                    'catalog.{locale}.json', 'boosts.json'):",
+        "                    'catalog.{locale}.json'):",
         "        hit = ui.find_data(pattern, 'zh_tw')",
         "        ok = ok and hit is not None",
         "        print('  %-24s %s' % (pattern, hit))",
