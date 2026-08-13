@@ -173,3 +173,74 @@ def test_recognises_a_real_screen_frame():
     assert match.accepted
     assert match.name == "初始的冥刻雜物"
     assert match.margin > 0.03
+
+
+# -- letter spacing belongs to full-width glyphs, and to no others -----------------------
+#
+# 「10,000バイン紙幣を手に入れた!!」 was a real chest line that scored 0.3771 against a 0.60
+# gate and was silently dropped — twice in one recorded session, and once entirely, a whole
+# chest that never existed as far as the data was concerned.
+#
+# `letter_spacing` is not tracking. It is the difference between what the atlas says a glyph
+# advances and what the game actually advances it, and it was fitted against text made
+# wholly of full-width characters, where a constant and a proportion cannot be told apart.
+# Added to an ASCII glyph as well, it over-advances by most of that glyph's own value on
+# EVERY character. Measured on the real frame, best alignment per character at 25px/+1.1:
+#
+#     1:-2  0:-4  ,:-5  0:-6  0:-7  0:-8  バ:-9  イ:-9  ン:-9  紙:-9  幣:-10
+#
+# Nine pixels of drift by the time the kana start, then flat — the full-width advance was
+# right all along. Widening the alignment search cannot repair it, because the error is
+# INSIDE the line: +-12px still only reached 0.548.
+
+def test_spacing_moves_full_width_glyphs_and_leaves_narrow_ones_alone():
+    """The whole model, asserted directly on rendered ink."""
+    import pytest
+
+    from wddrop_client.capture.glyph import make_renderer
+
+    atlas = ROOT / "data" / "atlas.ja.json"
+    if not atlas.exists():
+        pytest.skip("the Japanese atlas is not built")
+
+    def width(text, spacing):
+        return make_renderer(str(atlas), 25, (600, 40), spacing).ink_width(text)
+
+    # Four full-width characters: three gaps, so three helpings of spacing.
+    tight, loose = width("紙幣紙幣", 0.0), width("紙幣紙幣", 3.0)
+    assert loose - tight >= 8, "spacing did not reach the full-width glyphs at all"
+
+    # Four ASCII digits, the same number of gaps, and it must not move them.
+    assert width("0000", 0.0) == width("0000", 3.0), \
+        "spacing was added to narrow glyphs — the drift that lost 10,000バイン紙幣"
+
+
+def test_a_mixed_name_keeps_its_tail_where_the_game_puts_it():
+    """The failure was cumulative, so the test has to be about the END of the line.
+
+    The kana after the digits are what drifted out of place; a check on total width would
+    pass with the digits wrong and the tail wrong by the same amount.
+    """
+    import pytest
+
+    from wddrop_client.capture.glyph import make_renderer
+
+    atlas = ROOT / "data" / "atlas.ja.json"
+    if not atlas.exists():
+        pytest.skip("the Japanese atlas is not built")
+
+    def width(text, spacing):
+        return make_renderer(str(atlas), 25, (600, 40), spacing).ink_width(text)
+
+    # Adding the digits to a full-width name widens it by the digits' own advance — the
+    # SAME amount at every spacing, because the gaps the spacing applies to (between the
+    # kana) are there either way. Asserted as an invariant rather than against a measured
+    # number: what went wrong was that this grew with a spacing that is not the digits'.
+    added = {spacing: width("10,000バイン紙幣", spacing) - width("バイン紙幣", spacing)
+             for spacing in (0.0, 1.1, 2.5)}
+    # Within a pixel: the glyphs are composed supersampled and downscaled once, so a
+    # different spacing lands them on different sub-pixels and the measured ink can wobble
+    # by one. What must not happen is GROWTH — at +2.5 the old model added 15px here.
+    assert max(added.values()) - min(added.values()) <= 1, (
+        f"the digits' contribution moved with the spacing: {added} — that drift is what "
+        f"lost 10,000バイン紙幣")

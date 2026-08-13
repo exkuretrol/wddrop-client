@@ -28,7 +28,7 @@ APP_NAME = "wddrop"
 # the build that is SENDING. The release tag must say the same thing — CI refuses a tag that
 # disagrees, because a client that under-reports itself would be refused after the fix that
 # made it acceptable, and one that over-reports would be admitted before it.
-CLIENT_VERSION = "0.5.2"
+CLIENT_VERSION = "0.5.3"
 
 
 def config_dir() -> Path:
@@ -346,6 +346,12 @@ class ClientConfig:
     # frames are wanted and are not there.
     keep_frames: bool = False
     keep_all_frames: bool = False
+    # Ask GitHub, once a launch, whether there is a newer client. ON by default and stated
+    # in the disclaimer: a player running a build known to mis-read the screen is the one
+    # person who cannot find that out on their own, and the server's floor only reaches
+    # them if they upload — which is off until they say otherwise. See updates.py for what
+    # the request carries, which is nothing of theirs.
+    check_updates: bool = True
     # Detailed logging, off by default. A setting rather than a rebuild because the report
     # that needs it — "it did not record my chest" — arrives from someone who cannot
     # reproduce it on demand, and asking them to install a debug build is asking them to

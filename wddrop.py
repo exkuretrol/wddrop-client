@@ -7,8 +7,23 @@
 #     "mss>=9.0",
 #     "pydantic>=2.7",
 #     "httpx>=0.27",
+#     # Reading the game's own font out of the installation. Since 0.5.0 the atlas is not
+#     # shipped and is built on the player's machine instead, so without this the client
+#     # starts, says "UnityPy is not installed", and never gets an atlas — which reads as
+#     # recognition being broken rather than as a missing dependency.
+#     "UnityPy",
+#     # Reading the game WINDOW rather than the screen it is drawn on. Optional in that
+#     # capture falls back to `mss`, but the fallback records whatever is in FRONT of the
+#     # game, which is not the same recording.
+#     "windows-capture>=2.0; sys_platform == 'win32'",
 # ]
 # ///
+#
+# THIS LIST IS ONE OF THREE, and `tests/test_launcher.py` holds them together: the exe's is
+# `build_exe.RUNTIME_IMPORTS`, the project's is `client/pyproject.toml`, and this one is for
+# running the script straight out of a folder. PySide6 belongs to none of them — an 80MB GUI
+# toolkit must never become a requirement of reading the screen, so the window is asked for
+# explicitly with `--with PySide6-Essentials`.
 """
 Launcher — run this instead of `python -m wddrop_client`.
 

@@ -59,6 +59,35 @@ on the live path and never was: both emit paths reconstruct their text from the 
 already recognised, so `raw_text` restated `item_name` through a template and no unmatched
 line ever reached it.
 
+IDS ARE STABLE ACROSS A GAME UPDATE. NAMES ARE NOT. (measured 2026-08-13)
+-------------------------------------------------------------------------
+Comparing the game's own item and equipment tables at three dates a week apart — the last
+comparison spanning a content update — says which half of a record can still be trusted to
+mean the same thing next month:
+
+    items         2,582 entries throughout
+                  ids added 0, removed 0, RETYPED 0 ... and 6 RENAMED
+                  993000571  【ジラートの幻影】のクリスタル
+                          -> 希望のクリスタル【ジラートの幻影】   (and five siblings)
+    equipment     identification 823 -> 823, zero renames
+                  the per-row id 3,719 -> 3,720, i.e. one new roll variant
+
+So `item_id` and `equipment_identification` are the durable identity, and `item_name` is a
+DATED OBSERVATION: six of them are already wrong against today's tables. That cuts both ways
+and both ways are worth knowing —
+
+  * as IDENTITY the name is unusable, and it was never used that way here;
+  * as EVIDENCE it is the only record of what the player was actually shown, because
+    `item_reference` is replaced wholesale on every load and so always reads back today's
+    name for a drop recorded weeks ago.
+
+Dropping `item_name` from this wire is therefore a real option and not merely a saving (it
+is ~34 bytes a line, 2.7 MB at 80,000). It costs the evidence above, and it makes an
+unresolved line — which the client cannot currently produce, since it never emits a name it
+could not place — into a row with no identity at all. Decide it deliberately; it is a wire
+break, so it needs a SCHEMA_VERSION bump and the `client_policy` floor raised to the build
+that stops sending names.
+
 REMOVED, DELIBERATELY (2026-08-13), so that re-adding one is a decision and not a rediscovery
 --------------------------------------------------------------------------------------------
     raw_text                     reconstructed from item_name; never the pixels read

@@ -46,6 +46,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from . import theme
+from .items import droppable
 from .config import (AUTOMATIC_MODES, CLIENT_VERSION, SEND_BATCH, SEND_EACH, SEND_MANUAL,
                      ClientConfig, config_dir, data_dir, in_development, program_dir,
                      records_path, spool_path)
@@ -247,7 +248,7 @@ class FitWorker(QtCore.QThread):
             # 0.509, which then failed the profile's own self-check and refused to save.
             profile = fit_message_profile(
                 Image.open(self.drop), self.name, _prefix_from(fmt),
-                _band_font_candidates(self.args), [e.name for e in vocab.entries],
+                _band_font_candidates(self.args), droppable(vocab.entries),
                 locale=self.args.locale,
                 suffix=_suffix_from(fmt), separator=_separator_from(raw),
             )
@@ -300,7 +301,10 @@ class ReadWorker(QtCore.QThread):
             from .calibration import propose_item_name
 
             vocab, fmt, _ = _load_vocab(self.args)
-            names = [e.name for e in vocab.entries]
+            # The same answer space the runner reads with — see items.droppable. The window
+            # offers these as the "which item was it" list too, and offering a name that
+            # cannot be recognised would be offering a fit that cannot be checked.
+            names = droppable(vocab.entries)
             self.vocabulary.emit(names)
             # BOTH ends of the template. Which one carries the invariant text depends on the
             # locale, and passing only the prefix is why this never filled the box in for a
@@ -404,6 +408,100 @@ class ConsentPage(QtWidgets.QWidget):
         self.cfg.asked_sharing = True
         self.cfg.save()
         self.accepted.emit()
+
+
+class SeeingDialog(QtWidgets.QDialog):
+    """A live picture of what the client can see, beside where it is looking.
+
+    THIS IS FOR THE FAILURES THAT DO NOT LOOK LIKE FAILURES. A HUD template that is a
+    photograph of a rock face is a perfectly good crop of a wall; it scores merely low,
+    episodes quietly never close, and four chests are recorded as one. A band that capture
+    does not grab reads nothing at all while sitting in exactly the right place. Neither is
+    visible in a log, and both are obvious the moment the regions are drawn.
+
+    Two views, because they answer different questions:
+
+        where it looks   the regions outlined on the real frame
+        what it gets     the strips, and black everywhere else — which is the picture that
+                         shows a region MISSING rather than misplaced
+
+    Deliberately not an overlay on top of the game. That would mean a window over a process
+    protected by anti-cheat, and this needs nothing the game can see: the frames are the ones
+    capture already takes.
+    """
+
+    def __init__(self, args, parent=None, t=None):
+        super().__init__(parent)
+        self.args = args
+        self.t = t or Translator(None)
+        self.setWindowTitle(self.t("What the client sees"))
+        self.resize(760, 560)
+        layout = QtWidgets.QVBoxLayout(self)
+
+        self.view = QtWidgets.QLabel()
+        self.view.setAlignment(QtCore.Qt.AlignCenter)
+        self.view.setMinimumHeight(360)
+        layout.addWidget(self.view, 1)
+
+        self.note = QtWidgets.QLabel()
+        self.note.setObjectName("hint")
+        self.note.setWordWrap(True)
+        layout.addWidget(self.note)
+
+        row = QtWidgets.QHBoxLayout()
+        self.mode = QtWidgets.QComboBox()
+        self.mode.addItem(self.t("Where it looks"), "annotate")
+        self.mode.addItem(self.t("What it gets"), "captured")
+        self.mode.currentIndexChanged.connect(self._draw)
+        row.addWidget(self.mode)
+        row.addStretch(1)
+        close = QtWidgets.QPushButton(self.t("Close"))
+        close.clicked.connect(self.accept)
+        row.addWidget(close)
+        layout.addLayout(row)
+
+        self._frame = None
+        self._profile = None
+        # Slower than capture on purpose. This is for looking at, and a preview competing
+        # with the capture loop for the same window would be a debugging aid that changes
+        # what it is showing.
+        self._timer = QtCore.QTimer(self)
+        self._timer.timeout.connect(self._grab)
+        self._timer.start(500)
+        self._grab()
+
+    def _grab(self) -> None:
+        """One whole frame, not the strips — the point is to see what the strips LEAVE OUT."""
+        try:
+            from .__main__ import _live_size, _select_profile
+            from .capture.source import open_source
+
+            size = _live_size(self.args)
+            self._profile = _select_profile(self.args, size)
+            self._frame = next(open_source(self.args.source, fps=1).frames()).image
+        except Exception as exc:                       # noqa: BLE001
+            self._frame = None
+            self.note.setText(self.t("No game window yet: {why}", why=str(exc)))
+            self.view.clear()
+            return
+        self._draw()
+
+    def _draw(self) -> None:
+        if self._frame is None or self._profile is None:
+            return
+        from .preview import annotate, as_capture_sees, named_regions
+
+        shown = (annotate if self.mode.currentData() == "annotate" else as_capture_sees)(
+            self._frame, self._profile)
+        data = shown.convert("RGB").tobytes()
+        image = QtGui.QImage(data, shown.size[0], shown.size[1],
+                             shown.size[0] * 3, QtGui.QImage.Format_RGB888)
+        self.view.setPixmap(QtGui.QPixmap.fromImage(image).scaled(
+            self.view.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+        named = ", ".join(name for name, _box in named_regions(self._profile))
+        self.note.setText(self.t(
+            "{size} — regions: {regions}. Everything outside them is black to the client.",
+            size=f"{self._frame.size[0]}x{self._frame.size[1]}", regions=named))
 
 
 class CalibrateDialog(QtWidgets.QDialog):
@@ -626,6 +724,32 @@ class CalibrateDialog(QtWidgets.QDialog):
         self.status.setText(f"[!] {message}")
 
 
+class UpdateWorker(QtCore.QThread):
+    """Asks GitHub whether there is a newer client. On a thread, and silent about failure.
+
+    Emits nothing at all unless there is something to say — no signal for "you are current",
+    because there is no message for it either. Any failure is the same as being current from
+    the window's point of view: this is the least important thing the program does, and it
+    must never be the reason a player is looking at a spinner.
+    """
+
+    found = QtCore.Signal(str, str)
+
+    def __init__(self, cfg: ClientConfig, parent=None):
+        super().__init__(parent)
+        self.cfg = cfg
+
+    def run(self) -> None:                     # noqa: D102
+        try:
+            from .updates import check
+
+            update = check(self.cfg)
+        except Exception:                              # noqa: BLE001
+            return
+        if update is not None:
+            self.found.emit(update.version, update.page)
+
+
 class UploadWorker(QtCore.QThread):
     """Drains the spool. On a thread because it is network I/O of unbounded duration."""
 
@@ -647,6 +771,21 @@ class UploadWorker(QtCore.QThread):
             self.failed.emit(str(exc))
             return
         self.done.emit(result)
+
+
+def mmss(seconds) -> str:
+    """MM:SS, everywhere a duration is shown.
+
+    The window had two formats: the live counter read "5:07" while the ledger beside it read
+    "36s" for the same kind of quantity. Two ways of writing one thing is a thing to work out
+    rather than read, and the ledger's was the raw field off the record.
+
+    Zero-padded minutes so the column does not jitter as it crosses ten, and hours are folded
+    into the minutes rather than adding a third field — a dive that reaches 90:00 is better
+    read as ninety minutes than as 1:30:00 in a row of MM:SS.
+    """
+    total = max(0, int(seconds or 0))
+    return f"{total // 60:02d}:{total % 60:02d}"
 
 
 class RoomyRows(QtWidgets.QStyledItemDelegate):
@@ -895,6 +1034,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.uploader: UploadWorker | None = None
         self._upload_again = False
         self._titlebar_themed = False
+        self._asked_about_updates = False
+        self._update_page = None
         self._wheel_guard = WheelGuard(self)
         self.chests = 0
         self.mined = 0
@@ -998,6 +1139,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status.setObjectName("state")
         self.status.setWordWrap(True)
         rl.addWidget(self.status)
+        # Hidden until there IS one. A permanent "no updates" line is noise that teaches the
+        # player to stop reading the row the state line lives in.
+        self.update_link = QtWidgets.QLabel("")
+        self.update_link.setObjectName("meta")
+        self.update_link.setOpenExternalLinks(True)
+        self.update_link.setVisible(False)
+        rl.addWidget(self.update_link)
         outer.addWidget(ribbon)
 
         self.pages = QtWidgets.QStackedWidget()
@@ -1305,6 +1453,27 @@ class MainWindow(QtWidgets.QMainWindow):
                 names[floor["id"]] = floor["name"]
         return names
 
+    def _grouped(self, rows):
+        """(heading, rows) in the order they are shown, or one unlabelled group.
+
+        Money first because it is the smaller list and the one a player scans past, not
+        because it is the bigger number — sorting the groups by quantity would put currency
+        on top for exactly the reason it should not be mixed in.
+
+        A single group loses its heading: a table of items under a heading that says "items"
+        is a heading that tells nobody anything.
+        """
+        from .items import CURRENCY, ItemCategories
+
+        categories = ItemCategories()
+        buckets = {}
+        for row in rows:
+            buckets.setdefault(categories.of(row), []).append(row)
+        if len(buckets) < 2:
+            return [("", rows)] if rows else []
+        order = [(CURRENCY, self.t("Currency")), ("item", self.t("Items"))]
+        return [(label, buckets[key]) for key, label in order if buckets.get(key)]
+
     def _item_names(self):
         """What to call an item in the language the WINDOW is in.
 
@@ -1379,28 +1548,53 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stats_detail.setText("   ".join(detail))
 
         rows = data["by_item"]
+        # GROUPED, because money is not a drop. ゴールド and Gil come out of chests in
+        # amounts nothing else reaches, so a single ranked list is one currency row and then
+        # everything a player actually wants to see, pushed under it. See items.CURRENCY_IDS
+        # for why the two of them and not the coins.
+        groups = self._grouped(rows)
         # CLEARED, not just resized. Shrinking a table leaves the cells that were there —
         # switching from every source to veins alone left the previous row's share and bar
         # sitting on the TOTAL line, which read as a total having a percentage of itself.
         self.stats_table.clearContents()
         # A TOTAL row at the end, as the game's own tally screen has: a column of shares is
         # not readable without the number they are shares OF.
-        self.stats_table.setRowCount(len(rows) + (1 if rows else 0))
-        for index, row in enumerate(rows):
-            shown = self._item_names().display(row)
-            cells = (shown, f"×{row['quantity']}", f"{row['share'] * 100:.1f}%", "")
-            for column, value in enumerate(cells):
-                cell = QtWidgets.QTableWidgetItem(value)
-                if column:
-                    cell.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-                if column == 3:
-                    cell.setData(QtCore.Qt.UserRole, float(row["of_top"]))
-                    cell.setToolTip(self.t("{n} openings gave this", n=row["openings"]))
-                if column == 0 and shown != row["item"]:
-                    # What was actually on screen, kept within reach: the localised name is
-                    # a convenience, and the reading is the evidence.
-                    cell.setToolTip(row["item"])
-                self.stats_table.setItem(index, column, cell)
+        headings = len(groups) if len(groups) > 1 else 0
+        self.stats_table.setRowCount(len(rows) + headings + (1 if rows else 0))
+        index = 0
+        for heading, group in groups:
+            if headings:
+                label = QtWidgets.QTableWidgetItem(heading)
+                label.setForeground(QtGui.QColor(theme.VELLUM))
+                subtotal = QtWidgets.QTableWidgetItem(
+                    f"×{sum(r['quantity'] for r in group)}")
+                subtotal.setForeground(QtGui.QColor(theme.VELLUM))
+                subtotal.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+                self.stats_table.setItem(index, 0, label)
+                self.stats_table.setItem(index, 1, subtotal)
+                index += 1
+            # SHARES WITHIN THE GROUP, and bars against the group's own top row. A share of
+            # everything would say the same thing the heading already does, and a bar scaled
+            # to a currency total leaves every item as a stripe too short to compare.
+            within = sum(r["quantity"] for r in group) or 1
+            tallest = max((r["quantity"] for r in group), default=0) or 1
+            for row in group:
+                shown = self._item_names().display(row)
+                cells = (("   " if headings else "") + shown, f"×{row['quantity']}",
+                         f"{row['quantity'] / within * 100:.1f}%", "")
+                for column, value in enumerate(cells):
+                    cell = QtWidgets.QTableWidgetItem(value)
+                    if column:
+                        cell.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+                    if column == 3:
+                        cell.setData(QtCore.Qt.UserRole, row["quantity"] / tallest)
+                        cell.setToolTip(self.t("{n} openings gave this", n=row["openings"]))
+                    if column == 0 and shown != row["item"]:
+                        # What was actually on screen, kept within reach: the localised name
+                        # is a convenience, and the reading is the evidence.
+                        cell.setToolTip(row["item"])
+                    self.stats_table.setItem(index, column, cell)
+                index += 1
         if rows:
             total = QtWidgets.QTableWidgetItem(
                 self.t("total of {n} kinds", n=len(rows)))
@@ -1408,8 +1602,8 @@ class MainWindow(QtWidgets.QMainWindow):
             amount = QtWidgets.QTableWidgetItem(f"×{data['total_quantity']}")
             amount.setForeground(QtGui.QColor(theme.VELLUM))
             amount.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-            self.stats_table.setItem(len(rows), 0, total)
-            self.stats_table.setItem(len(rows), 1, amount)
+            self.stats_table.setItem(index, 0, total)
+            self.stats_table.setItem(index, 1, amount)
 
         note = [self.t("Counted from what was recorded on this computer, not from what was "
                        "sent. These are counts, not drop rates.")]
@@ -1509,6 +1703,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.cal_button = QtWidgets.QPushButton(self.t("Calibrate…"))
             self.cal_button.clicked.connect(self._calibrate)
             cal.addWidget(self.cal_button)
+            # Beside calibration because it is how you tell whether a calibration is any
+            # good. The measured case: at 1920x1080 the region search preferred a rock face
+            # to the minimap, and the stored HUD template was a photograph of a wall — a
+            # thing no score reported and one glance would have.
+            self.seeing_button = QtWidgets.QPushButton(self.t("See it…"))
+            self.seeing_button.clicked.connect(self._see)
+            cal.addWidget(self.seeing_button)
             holder = QtWidgets.QWidget()
             holder.setLayout(cal)
             form.addRow(self.t("Calibrate…").rstrip("…"), holder)
@@ -1565,6 +1766,25 @@ class MainWindow(QtWidgets.QMainWindow):
         # Beside "keep the frames" because it is the same kind of thing and answers the same
         # question from the other side: the frames say what was on screen, the log says what
         # this client made of it. A miss needs both, and neither can be turned on afterwards.
+        # Beside the log because both are about this program rather than about the game, and
+        # this is the only place a player can stop the one request that goes anywhere other
+        # than the study's own server.
+        self.updates = QtWidgets.QCheckBox(self.t("Tell me when a new version is out"))
+        self.updates.setChecked(self.cfg.check_updates)
+        self.updates.toggled.connect(self._updates_changed)
+        updates_box = QtWidgets.QVBoxLayout()
+        updates_box.setSpacing(3)
+        updates_box.addWidget(self.updates)
+        note = QtWidgets.QLabel(self.t(
+            "Asks GitHub once, when the window opens, whether a newer client exists. It "
+            "sends nothing about you or your game."))
+        note.setObjectName("hint")
+        note.setWordWrap(True)
+        updates_box.addWidget(note)
+        holder = QtWidgets.QWidget()
+        holder.setLayout(updates_box)
+        form.addRow(self.t("New versions"), holder)
+
         self.trace = QtWidgets.QCheckBox(self.t("Write a detailed log"))
         self.trace.setChecked(self.cfg.trace)
         self.trace.toggled.connect(self._trace_changed)
@@ -1701,6 +1921,11 @@ class MainWindow(QtWidgets.QMainWindow):
     def _record_changed(self, _checked: bool) -> None:
         self.cfg.keep_frames = self.record.isChecked()
         self.cfg.keep_all_frames = self.record_all.isChecked()
+        self.cfg.save()
+
+    def _updates_changed(self, checked: bool) -> None:
+        """Off means the request is not made, not that its answer is hidden."""
+        self.cfg.check_updates = bool(checked)
         self.cfg.save()
 
     def _trace_changed(self, checked: bool) -> None:
@@ -1979,6 +2204,9 @@ class MainWindow(QtWidgets.QMainWindow):
         dialog.exec()
         self._refresh_setup()
 
+    def _see(self) -> None:
+        SeeingDialog(self.args_for(), self, t=self.t).exec()
+
     def _toggle(self) -> None:
         if self.worker is not None and self.worker.isRunning():
             self.start.setEnabled(False)
@@ -2032,9 +2260,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _elapsed(self) -> str:
         if self._started_at is None:
-            return "0:00"
-        seconds = int((datetime.now(timezone.utc) - self._started_at).total_seconds())
-        return f"{seconds // 60}:{seconds % 60:02d}"
+            return mmss(0)
+        return mmss((datetime.now(timezone.utc) - self._started_at).total_seconds())
 
     def _show_empty(self) -> None:
         """What the page says before anything has been recorded.
@@ -2092,7 +2319,7 @@ class MainWindow(QtWidgets.QMainWindow):
         unread = qc.get("panel_lines_unread")
         if unread:
             items += f"   [{unread} unread]"
-        row = self._add_row(f"{dive.get('elapsed_seconds', 0)}s",
+        row = self._add_row(mmss(dive.get("elapsed_seconds", 0)),
                             self.t("vein") if mining else self.t("chest"),
                             items or "(nothing)")
         if qc.get("label_conflict") and self._hints is not None:
@@ -2181,8 +2408,12 @@ class MainWindow(QtWidgets.QMainWindow):
         stats = getattr(self.worker, "stats", None) or {}
         if not stats:
             return
+        # THE FRAME COUNT IS OURS, NOT THE PLAYER'S. It answers "is the loop sampling",
+        # which is a question about this program rather than about their dive, and it sits
+        # in the one line the record page uses to say whether anything is working.
+        counted = (f"{stats.get('frames', 0)} frames   " if in_development() else "")
         self.counters.setText(
-            f"{self._elapsed()}   {stats.get('frames', 0)} frames   "
+            f"{self._elapsed()}   {counted}"
             f"{self.chests} {self.t('chest')}   {self.mined} {self.t('vein')}")
         capped = stats.get("record_capped")
         if capped and not getattr(self, "_said_capped", False):
@@ -2315,6 +2546,27 @@ class MainWindow(QtWidgets.QMainWindow):
         if not self._titlebar_themed:
             self._titlebar_themed = True
             theme.apply_titlebar(self)
+        # ONCE A LAUNCH, AND ONLY AFTER THE WINDOW IS UP. A network call in __init__ delays
+        # the one thing the player is waiting for, to answer a question that can wait.
+        if not self._asked_about_updates:
+            self._asked_about_updates = True
+            self._update_worker = UpdateWorker(self.cfg, self)
+            self._update_worker.found.connect(self._say_update)
+            self._update_worker.start()
+
+    def _say_update(self, version: str, page: str) -> None:
+        """A newer client exists. Say so where the player already looks, and link it.
+
+        NOT a modal. They opened this to record a dive, and a dialogue in front of that is a
+        thing to dismiss before doing what they came for. The state line is where this
+        window says everything else that is true right now.
+        """
+        self._update_page = page
+        self._say(self.t("Version {version} is out — this is {running}.",
+                         version=version, running=CLIENT_VERSION), "attention")
+        self.update_link.setText(
+            f'<a href="{page}">{self.t("Get it")}</a>')
+        self.update_link.setVisible(True)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:      # noqa: N802 (Qt)
         if self.worker is not None and self.worker.isRunning():

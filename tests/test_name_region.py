@@ -25,6 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "client"))
+sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
 import pytest  # noqa: E402
 
@@ -332,16 +333,35 @@ def test_a_wrapped_line_still_names_the_item(renderer):
 DIGITS = "100拜恩紙幣"
 WITH_DIGITS = [DIGITS, "10,000拜恩紙幣", "莫尼翁銀幣", "朗佩爾金幣", "大巨岩符咒",
                "倫戈南戈翠貝殼幣", "高級治療劑", "聖劍碎片", *NAMES]
-# Per-character advance error, in pixels. The GAME's digits are narrower than the atlas draws
-# them, so the observation drifts left along the line; rendering the observation with a
-# tighter spacing reproduces that, which a rigid shift would not — the point is that the two
-# disagree MORE the further into the line you read.
-DRIFT = -0.7
+# WHAT THE SECOND LOOK IS FOR, NOW THAT THE DIGITS NO LONGER DRIFT.
+#
+# It was written for 「100拜恩紙幣」: the game's digits are narrower than the atlas drew them,
+# so the line drifted left along its own length and no single +-1 offset fitted all of it.
+# That is fixed at the source — `letter_spacing` was being added to narrow glyphs it does
+# not belong to (AtlasRenderer._spacing_for, and test_glyph asserts the model) — and this
+# test said so itself the moment it stopped measuring anything: "the narrow search accepted
+# '100拜恩紙幣' at 0.8199".
+#
+# A cumulative fixture cannot replace it. Full-width drift spreads the error symmetrically,
+# so the +-1 search finds a compromise offset and a wider one recovers almost nothing:
+# measured, 13 characters at -0.7 give 0.5122 at +-1 and 0.5695 at +-3, both refused.
+#
+# What a WIDER ALIGNMENT genuinely recovers is a line whose START is further from the
+# calibrated offset than +-1 — a window that moved, a different UI scale, jitter past what
+# calibration pinned. Measured on this fixture:
+#
+#     shifted 2px    +-1 0.7678 accepted      +-3 1.0000
+#     shifted 3px    +-1 0.4781 REFUSED       +-3 1.0000 accepted
+#     shifted 4px    +-1 0.3779 REFUSED       +-3 0.7678 accepted
+DRIFTS = "北穿幽靈城的妖異乳白色雜物"
+OFFSET_PX = 3
 
 
 def _drifting(renderer, text: str):
-    """The line as the game draws it: same glyphs, slightly tighter advances."""
-    return make_renderer(FONTS[0], renderer.size, WINDOW, DRIFT).render(text)
+    """The line as a client whose window has moved sees it: right glyphs, wrong origin."""
+    import numpy as np
+
+    return np.roll(renderer.render(text), OFFSET_PX, axis=1)
 
 
 def test_a_line_that_advances_differently_is_found_at_a_wider_alignment(renderer):
@@ -358,17 +378,17 @@ def test_a_line_that_advances_differently_is_found_at_a_wider_alignment(renderer
 
     It was the second of three items in that chest, and it was recorded as two.
     """
-    observed = _drifting(renderer, DIGITS)
+    observed = _drifting(renderer, DRIFTS)
     index = RenderRecognizer(renderer, "", WITH_DIGITS, shifts=centred_shifts((0, 0), 1))
 
     first = index.recognize(observed)
     again = index.refit(observed, first.shortlist,
                         shifts=centred_shifts((0, 0), REFIT_RADIUS))
 
-    assert first.best == DIGITS and not first.accepted, (
+    assert first.best == DRIFTS and not first.accepted, (
         f"the narrow search accepted {first.best!r} at {first.score:.4f} — this test is no "
         f"longer measuring anything")
-    assert again.accepted and again.name == DIGITS, (
+    assert again.accepted and again.name == DRIFTS, (
         f"the second look gave {again.best!r} at {again.score:.4f}, margin {again.margin:.4f}")
 
 
@@ -428,9 +448,9 @@ def test_the_band_asks_for_a_second_look_before_giving_up(renderer, monkeypatch)
     monkeypatch.setattr(CaptureRunner, "_read_quantity", lambda self, w, name: None)
     monkeypatch.setattr(CaptureRunner, "_as_line", lambda self, name: name)
 
-    read = runner._recognise(_drifting(renderer, DIGITS), now=0.0, key=None)
+    read = runner._recognise(_drifting(renderer, DRIFTS), now=0.0, key=None)
 
-    assert read == DIGITS
+    assert read == DRIFTS
     assert runner.stats.get("realigned") == 1, "the band never asked for a second look"
 
 
@@ -478,3 +498,73 @@ def test_an_ambiguous_reading_is_not_offered_a_second_look(renderer, monkeypatch
 
     assert read == "", f"a speck of wall was recorded as {read!r}"
     assert not asked, "an ambiguous reading was sent for a second look anyway"
+
+
+# -- a name has to fit on one row, and one of them already does not ----------------------
+
+# WHAT CAN COME OUT OF A DUNGEON is decided in `wddrop_client.items`, not here.
+#
+# It used to be defined in this file, and then the client grew the same rule for a different
+# reason — trimming its own candidate index from 3,268 names to 2,154 — and two copies of a
+# judgement is the exact shape of mistake this session has now paid for three times. The
+# client's is the one that decides what a player's recogniser can read, so the client's is
+# the one this test measures.
+
+def test_every_droppable_name_still_fits_on_the_row_the_client_can_see():
+    """THE SECOND ROW OF A WRAPPED LINE DOES NOT EXIST FOR THE CLIENT.
+
+    The game wraps a long message rather than clipping it, and live capture grabs strips:
+    the message band is read at y999-1020 and captured at y995-1024, while the second row of
+    a real wrapped frame starts at y1037. Outside the strip is composited black, so a name
+    that crosses the break is not read badly — half of it is not there at all.
+
+    THE FRIGHTENING NUMBER IS THE WRONG NUMBER. 519 of 3,268 LINES are wider than the band,
+    but a line is `name + ×N + を手に入れた!!` and it is the TAIL that wraps; the reader masks
+    the tail off before matching anyway. Measured on a real frame: 「北穿の幽霊城の妖なる乳白色
+    のガラクタを手 / に入れた!!」 read at 0.7282 with half its wording on the row below, and
+    the same junk family read its 「×3」 correctly in another session.
+
+    What would cost an item is a NAME that crosses the break. Of everything that can actually
+    fall out of a chest, none does — the widest is 539px against 611 usable, about three
+    characters of margin. So this is a canary, not a bug report: one longer junk name in a
+    game update and a real drop is lost silently, and this fails instead. On the day it
+    does, the reader has to learn to read two rows, which is a real change to the comparison
+    and is not worth making before something that can drop needs it.
+    """
+    import json
+
+    import pytest
+
+    from wddrop_client.calibration import ProfileStore
+    from wddrop_client.capture.glyph import make_renderer
+
+    vocab = ROOT / "data" / "vocab.ja.json"
+    atlas = ROOT / "data" / "atlas.ja.json"
+    if not (vocab.exists() and atlas.exists()):
+        pytest.skip("the Japanese vocabulary/atlas is not built")
+    profile = ProfileStore.shipped("ja").get((704, 1241))
+    if profile is None:
+        pytest.skip("no shipped fit for 704x1241")
+
+    from wddrop_client.capture.ocr import Vocabulary
+    from wddrop_client.items import droppable as droppable_names
+
+    droppable = set(droppable_names(Vocabulary.load(vocab).entries))
+
+    # A canvas far wider than the frame, so this measures rather than clips.
+    renderer = make_renderer(str(atlas), profile.font_size, (4000, 60),
+                             profile.letter_spacing)
+    usable = profile.frame_size[0] - profile.text_x0
+    widths = {name: renderer.ink_width(name) for name in droppable}
+
+    too_wide = {n: w for n, w in widths.items() if w > usable}
+    assert not too_wide, (
+        f"{len(too_wide)} droppable name(s) no longer fit the row the client reads "
+        f"({usable}px), so half of each is on a row capture never takes: "
+        + ", ".join(f"{n} ({w}px)" for n, w in sorted(too_wide.items(),
+                                                      key=lambda kv: -kv[1])[:5]))
+    # The margin is the thing worth watching, so it is asserted rather than assumed.
+    widest, width = max(widths.items(), key=lambda kv: kv[1])
+    assert usable - width >= 40, (
+        f"only {usable - width}px of headroom left — {widest} is {width}px of {usable}. "
+        f"One more character and a real drop goes unread.")

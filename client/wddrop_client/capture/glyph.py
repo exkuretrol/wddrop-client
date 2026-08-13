@@ -227,7 +227,13 @@ class GlyphRenderer:
         x = 0.0
         for ch in text:
             draw.text((x, 0), ch, font=self._font, fill=255)
-            x += self._font.getlength(ch) + self.letter_spacing
+            advance = self._font.getlength(ch)
+            # Full-width glyphs only, for the reason measured in AtlasRenderer._spacing_for:
+            # the spacing is a correction to the FULL-WIDTH advance, and adding it to a
+            # narrow glyph over-advances by most of its own value on every character. A font
+            # has no `reference`, so full-width is read as "about as wide as it is tall",
+            # which is what a CJK em square is.
+            x += advance + (self.letter_spacing if advance >= self.size * 0.9 else 0.0)
         return np.asarray(canvas, dtype=float)
 
     def ink_width(self, text: str) -> int:
@@ -329,9 +335,41 @@ class AtlasRenderer:
             if glyph is not None:
                 canvas.paste(glyph, (int(round(x - offset)), int(round(-offset))), glyph)
             entry = self._index.get(ch)
-            advance = (entry["advance"] if entry else self.reference * 0.5) * self._scale
-            x += (advance + self.letter_spacing) * ss
+            raw = entry["advance"] if entry else self.reference * 0.5
+            advance = raw * self._scale
+            x += (advance + self._spacing_for(raw)) * ss
         return np.asarray(canvas.resize((w, h), Image.LANCZOS), dtype=float)
+
+    def _spacing_for(self, raw_advance: float) -> float:
+        """The fitted spacing, for FULL-WIDTH glyphs only.
+
+        LETTER SPACING IS NOT TRACKING, AND A NARROW GLYPH DOES NOT GET IT. It is the
+        difference between what the atlas says a glyph advances and what the game actually
+        advances it, and that difference was fitted against text made entirely of full-width
+        characters — where a constant and a proportion are indistinguishable. Applied to an
+        ASCII glyph too, it over-advances by most of its own value, EVERY character, and the
+        error accumulates until the rest of the line no longer lines up at all.
+
+        Measured on 「10,000バイン紙幣を手に入れた!!」, a real chest line that was silently
+        dropped. Best alignment per character at the fitted 25px/+1.1:
+
+            1:-2  0:-4  ,:-5  0:-6  0:-7  0:-8  バ:-9  イ:-9  ン:-9  紙:-9  幣:-10
+                  └──────── drifts 1-2px per ASCII glyph ────────┘└─ then stops ─┘
+
+        Nine pixels by the time the kana begin, and flat from there — the full-width advance
+        is right and only the narrow ones are wrong. Every glyph matched its own bitmap at
+        0.82-0.95 throughout: the shapes were never the problem, only where they were put.
+
+        Whole-line score for that name, same frame: 0.3771 flat, 0.8257 this way, against a
+        0.60 gate. Widening the alignment search cannot fix it — the drift is internal to the
+        line, so +-12px still only reached 0.548.
+
+        NOTHING MADE OF FULL-WIDTH CHARACTERS CHANGES BY A HAIR, which is most of this
+        vocabulary and every fit already made: with `raw == reference` the two models are the
+        same arithmetic. Measured on the same session, to four decimals — 金の針 0.8531,
+        ランペール金貨 0.8131, 北穿の幽霊城の妖なる乳白色のガラクタ 0.7282, before and after.
+        """
+        return self.letter_spacing if raw_advance >= self.reference else 0.0
 
     def ink_width(self, text: str) -> int:
         box = ink_bbox(self.render(text))

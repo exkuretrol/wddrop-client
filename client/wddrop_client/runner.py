@@ -30,7 +30,7 @@ from pathlib import Path
 from wddrop_schema.models import SCHEMA_VERSION
 
 from .calibration import Profile
-from .config import CLIENT_VERSION
+from .config import CLIENT_VERSION, in_development
 
 log = logging.getLogger("wddrop.runner")
 
@@ -333,6 +333,15 @@ class CaptureRunner:
         # recording would not reproduce the run it is meant to explain.
         self.record_dir = Path(record_dir) if record_dir else None
         self.record_mode = record_mode
+        # THE CAP IS FOR PLAYERS, NOT FOR US. It exists so that ticking "keep the frames"
+        # cannot quietly fill someone's disk: 4,000 frames is a few minutes of episodes and
+        # about a gigabyte. In development the frames ARE the work — a session that stops
+        # recording halfway is a session whose interesting half cannot be replayed, and the
+        # one time that matters is the time something went wrong late in a long run.
+        #
+        # `record_limit=0` also means no cap, so a caller can ask for that outright.
+        if record_limit and in_development():
+            record_limit = 0
         self.record_limit = record_limit
         # HUD-present frames kept either side of an episode. Saving ONLY HUD-absent frames
         # produced recordings that could not be replayed: episodes close when the HUD
@@ -1176,7 +1185,7 @@ class CaptureRunner:
         which is where everything interesting happens and is a small fraction of a session.
         `all` keeps everything and gets large fast, so both are capped.
         """
-        if self.record_dir is None or self._recorded >= self.record_limit:
+        if self.record_dir is None or self._capped():
             return
 
         if not hud_present and not self._in_episode:
@@ -1266,8 +1275,12 @@ class CaptureRunner:
                         "Capture was not affected; the recording has gaps.",
                         self.stats["record_dropped"])
 
+    def _capped(self) -> bool:
+        """Has recording hit its ceiling? A limit of 0 has none — see __init__."""
+        return bool(self.record_limit) and self._recorded >= self.record_limit
+
     def _write(self, image) -> None:
-        if self._recorded >= self.record_limit:
+        if self._capped():
             return
         target = self._episode_dir()
         target.mkdir(parents=True, exist_ok=True)
@@ -1307,7 +1320,7 @@ class CaptureRunner:
             self._episode_frame -= 1
             self.stats["record_dropped"] = self.stats.get("record_dropped", 0) + 1
             return
-        if self._recorded == self.record_limit:
+        if self.record_limit and self._recorded == self.record_limit:
             # SAID OUT LOUD, not just logged. A player who ticked "keep the frames" is
             # relying on them: they keep playing, the frames quietly stop, and the one thing
             # that could explain a miss an hour later does not exist. Recording of DROPS

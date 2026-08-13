@@ -198,7 +198,21 @@ def test_the_band_is_fitted_against_the_face_it_is_drawn_in(tmp_path):
     args = SimpleNamespace(fonts=str(panel), band_fonts=str(band))
     assert _band_font_candidates(args) == [str(band)]
 
+    # WITHOUT AN EXPLICIT ONE, BOTH ARE SWEPT AND THE SCORE DECIDES — twin first.
+    #
+    # This used to fall straight back to whatever `--fonts` named, which is the panel's
+    # atlas, and that is how a real 1920x1080 calibration came to fit the band against the
+    # wrong face, score under the gate, fail its own self-check and save nothing. Which FILE
+    # holds which face is a property of how the atlas was built on that machine, so it is
+    # measured rather than assumed:
+    #
+    #     scenario 22px -0.3   0.806      base 21px +1.0   0.759
+    both = _band_font_candidates(SimpleNamespace(fonts=str(panel), band_fonts=None))
+    assert both[0] == str(band), "the band's own face is not tried first"
+    assert str(panel) in both, "the other face is no longer available to win on score"
+
     # ...and with no band atlas built yet, it falls back rather than failing.
+    band.unlink()
     assert _band_font_candidates(SimpleNamespace(fonts=str(panel), band_fonts=None)) \
         == [str(panel)]
 

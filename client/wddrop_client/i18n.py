@@ -286,6 +286,38 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "Diese Version kann keine Aufzeichnungen mehr senden — aktualisiere auf "
               "{version}. Nichts ging verloren: {waiting} Aufzeichnung(en) bleiben hier und "
               "werden nach dem Update gesendet."},
+    # The two headings the stats table groups under. "Currency" is ゴールド and Gil and
+    # nothing else — the coins and banknotes are things you spend, not the wallet.
+    "Currency": {"zh_tw": "貨幣", "zh_cn": "货币", "ja": "通貨", "ko": "화폐", "de": "Währung"},
+    "Items": {"zh_tw": "物品", "zh_cn": "物品", "ja": "アイテム", "ko": "아이템",
+              "de": "Gegenstände"},
+    # A newer build exists. States both versions, because "out of date" without a number is
+    # a thing a player cannot check, and this window has to be worth believing.
+    "Version {version} is out — this is {running}.": {
+        "zh_tw": "已推出 {version} 版，這個是 {running}。",
+        "zh_cn": "已推出 {version} 版，这个是 {running}。",
+        "ja": "{version} が公開されています。これは {running} です。",
+        "ko": "{version} 이(가) 나왔습니다. 이 버전은 {running} 입니다.",
+        "de": "Version {version} ist da — dies ist {running}."},
+    "Get it": {"zh_tw": "前往下載", "zh_cn": "前往下载", "ja": "入手する",
+               "ko": "받으러 가기", "de": "Holen"},
+    "New versions": {"zh_tw": "新版本", "zh_cn": "新版本", "ja": "新しいバージョン",
+                     "ko": "새 버전", "de": "Neue Versionen"},
+    "Tell me when a new version is out": {
+        "zh_tw": "有新版本時通知我", "zh_cn": "有新版本时通知我",
+        "ja": "新しいバージョンが出たら知らせる",
+        "ko": "새 버전이 나오면 알려주기",
+        "de": "Sag mir Bescheid, wenn es eine neue Version gibt"},
+    "Asks GitHub once, when the window opens, whether a newer client exists. It sends "
+    "nothing about you or your game.": {
+        "zh_tw": "視窗開啟時向 GitHub 查詢一次是否有新版本。不會送出任何關於你或你遊戲的資料。",
+        "zh_cn": "窗口打开时向 GitHub 查询一次是否有新版本。不会送出任何关于你或你游戏的数据。",
+        "ja": "ウィンドウを開いたときに一度だけ、新しいバージョンがあるか GitHub に問い合わせます。"
+              "あなたやゲームに関する情報は送信しません。",
+        "ko": "창을 열 때 한 번만 새 버전이 있는지 GitHub에 확인합니다. 사용자나 게임에 대한 "
+              "정보는 보내지 않습니다.",
+        "de": "Fragt GitHub einmal beim Öffnen des Fensters, ob es einen neueren Client "
+              "gibt. Es wird nichts über dich oder dein Spiel gesendet."},
     # The log. Named for what it is FOR, not for its level: "trace" and "debug" are words
     # from inside this program, and the player reading this label is being asked to turn it
     # on so that a miss can be explained.
@@ -307,6 +339,29 @@ STRINGS: dict[str, dict[str, str]] = {
               "Nichts wird hochgeladen."},
     "Calibrate…": {"zh_tw": "校正…", "zh_cn": "校正…", "ja": "キャリブレーション…",
                    "ko": "보정…", "de": "Kalibrieren…"},
+    # Looking at what the client can see. Development only, but translated like everything
+    # else: the language of a window should not change depending on which build it is.
+    "See it…": {"zh_tw": "看一下…", "zh_cn": "看一下…", "ja": "見てみる…",
+                "ko": "살펴보기…", "de": "Ansehen…"},
+    "What the client sees": {
+        "zh_tw": "程式看到的畫面", "zh_cn": "程序看到的画面", "ja": "クライアントに見えているもの",
+        "ko": "클라이언트가 보는 것", "de": "Was der Client sieht"},
+    "Where it looks": {"zh_tw": "它看哪裡", "zh_cn": "它看哪里", "ja": "どこを見ているか",
+                       "ko": "어디를 보는지", "de": "Wohin es schaut"},
+    "What it gets": {"zh_tw": "它拿到什麼", "zh_cn": "它拿到什么", "ja": "何を受け取るか",
+                     "ko": "무엇을 받는지", "de": "Was es bekommt"},
+    "Close": {"zh_tw": "關閉", "zh_cn": "关闭", "ja": "閉じる", "ko": "닫기", "de": "Schließen"},
+    "No game window yet: {why}": {
+        "zh_tw": "還找不到遊戲視窗：{why}", "zh_cn": "还找不到游戏窗口：{why}",
+        "ja": "ゲームウィンドウがまだ見つかりません：{why}",
+        "ko": "아직 게임 창을 찾지 못했습니다: {why}",
+        "de": "Noch kein Spielfenster: {why}"},
+    "{size} — regions: {regions}. Everything outside them is black to the client.": {
+        "zh_tw": "{size} — 區域：{regions}。這些範圍以外，程式一律看成黑色。",
+        "zh_cn": "{size} — 区域：{regions}。这些范围以外，程序一律看成黑色。",
+        "ja": "{size} — 領域：{regions}。この外側はすべて黒として扱われます。",
+        "ko": "{size} — 영역: {regions}. 그 바깥은 모두 검게 처리됩니다.",
+        "de": "{size} — Bereiche: {regions}. Alles außerhalb ist für den Client schwarz."},
     "Export my data…": {"zh_tw": "匯出我的資料…", "zh_cn": "导出我的数据…",
                         "ja": "自分のデータを書き出す…", "ko": "내 데이터 내보내기…",
                         "de": "Meine Daten exportieren…"},

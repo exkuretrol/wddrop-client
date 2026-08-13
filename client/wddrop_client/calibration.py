@@ -558,7 +558,25 @@ def fit_message_profile(
 # assumed: the mobile reference put it at x 0.72-0.97 of a portrait frame, while the Steam
 # client at 1920x1080 puts it at x 0.91-0.99 — a fixed fractional region fitted to one
 # captured almost none of the other.
-HUD_SEARCH_X, HUD_SEARCH_Y = 0.55, 0.35
+# THE MINIMAP IS IN A CORNER, IN BOTH LAYOUTS, AND THE SEARCH NOW STARTS THERE.
+#
+# It began at 0.55 of the width, which is most of the right-hand side of the screen, and
+# edge density alone cannot tell a panel from a rock face — so at 1920x1080 it chose a wall
+# at x 0.70-0.78 and stored a photograph of it as the HUD template. Episodes then never
+# close, and four chests are recorded as one.
+#
+# Measured on a real walking frame at each resolution:
+#
+#     1920x1080   floor 0.55 -> x 0.700-0.780  straightness 0.216   a rock
+#                 floor 0.85 -> x 0.912-0.992  straightness 0.493   the minimap
+#      704x1241   floor 0.55 -> x 0.891-0.970  straightness 0.482
+#                 floor 0.85 -> x 0.895-0.974  straightness 0.482   unchanged
+#
+# So the tighter floor fixes the landscape layout and leaves the portrait one where it was.
+# It is a floor rather than a fixed region because the two layouts put the minimap at
+# different heights — y 0.16 in portrait, y 0.07 in landscape — and a region fitted to one
+# captures almost none of the other.
+HUD_SEARCH_X, HUD_SEARCH_Y = 0.85, 0.35
 HUD_WINDOW_SHAPES = ((0.08, 0.10), (0.09, 0.14), (0.10, 0.18), (0.12, 0.22))
 # Fraction of the panel, measured from its bottom, holding the button bar. Only the chrome
 # may be matched: the map interior redraws constantly as the floor is explored.
@@ -633,8 +651,14 @@ def detect_hud_region(frame) -> tuple[float, float, float, float]:
         bw, bh = int(w * fw), int(h * fh)
         if bw < 8 or bh < 8:
             continue
+        # CLAMPED so the window cannot start where it will not fit. The old bound was
+        # `max(int(w * HUD_SEARCH_X) + 1, w - bw)`, which for a wide window and a high floor
+        # yields a single start beyond the frame — the crop then indexes past the edge and
+        # calibration dies with `index 1957 is out of bounds for axis 1 with size 1920`,
+        # which says nothing about minimaps to whoever reads it.
+        last = max(0, w - bw)
         for y0 in range(0, max(1, int(h * HUD_SEARCH_Y) - bh), step):
-            for x0 in range(int(w * HUD_SEARCH_X), max(int(w * HUD_SEARCH_X) + 1, w - bw), step):
+            for x0 in range(min(int(w * HUD_SEARCH_X), last), last + 1, step):
                 d = density(y0, x0, y0 + bh, x0 + bw)
                 if best is None or d > best[0]:
                     best = (d, x0, y0, bw, bh)

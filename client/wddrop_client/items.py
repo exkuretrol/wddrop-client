@@ -147,3 +147,165 @@ class ItemNames:
         if family is not None and int(family) in self._equipment:
             return self._equipment[int(family)]
         return row.get("item_name") or row.get("equipment_name") or row.get("item") or "?"
+
+
+# Two groups, and only two: MONEY and THINGS.
+#
+# The game's own `Item::*` types are no use for this. There are 44 of them, they say what an
+# item is FOR rather than what it is, and they group things nobody would group:
+# `Item::RelicEquipmentMaterial` holds the coins and banknotes beside 「〜の証」 proofs and
+# 「〜の欠片」 weapon shards, because all three are spent on relic equipment.
+#
+# It is tempting to read the coins as money — 貨 ends every one of them, 紙幣 every note —
+# and that was tried and is wrong. 「ランペール金貨」 and 「10,000バイン紙幣」 are things a chest
+# gives you and you spend at a counter, no different from a shard. The wallet holds two
+# things: ゴールド and Gil.
+CURRENCY = "currency"
+ITEM = "item"
+
+# BY ID, NEVER BY NAME. The window speaks six languages and the id is the only spelling that
+# does not move: 1 is ゴールド, 金幣, Gold and 골드 depending on who is looking, and a name
+# rule would file a player's money as an ordinary item the moment they changed the interface
+# language — silently, and only for them.
+CURRENCY_IDS = frozenset({
+    1,          # ゴールド / 金幣 / Gold — the game's own money
+    3000500,    # Gil — the collaboration currency, and money in exactly the same way
+})
+
+
+class ItemCategories:
+    """Which of the two headings a row belongs under. Display only.
+
+    Resolved at display time rather than stamped onto a record: the grouping is our word for
+    the thing and not an observation, so a record made last month moves if the wording
+    changes. Nothing here reaches the wire.
+    """
+
+    def of(self, row: dict) -> str:
+        item_id = row.get("item_id")
+        if item_id is not None and int(item_id) in CURRENCY_IDS:
+            return CURRENCY
+        return ITEM
+
+
+# WHAT A DUNGEON CAN ACTUALLY HAND YOU, and therefore what the recogniser needs to be able
+# to read. Everything else is weight: 3,268 candidates rendered, held and correlated, when
+# 2,154 of them are the answer space.
+#
+# THE MESSAGE BAND IS NOT A GENERAL ACQUISITION LINE. It is one game string,
+# `DungeonTreasure@DropItem` — 「{0}を手に入れた!!」 — emitted by the treasure system. A quest
+# handing over a mission pass emits `Scenario@ObtainItemGet` instead, which is different
+# wording this never matches. The mining panel is a third, `Common@GetItem`. So "can this
+# come out of a chest or a vein" really is the question, and the answer bounds the index.
+#
+# The judgement is the project owner's, from the drop tables, which are not in the
+# vocabulary. Checked against every item ever recorded — 75 records over nine sessions,
+# chests and mining — and none of them is excluded by this.
+#
+# BEING WRONG HERE IS NOT FREE. An excluded name cannot be read at all: the line is either
+# refused, or matched to the nearest name that IS included and recorded as that. So this
+# excludes categories, never individual awkward names, and every rule below is one that can
+# be checked by someone who reads the language.
+NOT_FROM_A_DUNGEON = frozenset({
+    "Item::MissionPass",            # bought or awarded
+    "Item::InheritSkill",           # 秘伝書の一節
+    "Item::LimitedSkillLevelup",    # 技能書
+    "Item::JobChangeable",          # 指南書
+    "Item::Valuable",
+    "Item::VipPass",
+    "Item::EventMissionRelease",
+})
+# Junk carrying any of these is event or collection stock: 「稀なる遺骸」 and 「【追憶】…」 are
+# the bonus remains, 「朽ちた巻物」 the decayed scrolls.
+NOT_FROM_A_DUNGEON_JUNK = ("稀なる遺骸", "【追憶】", "朽ちた巻物")
+# The basic remains ARE loot; the described ones are a named character's. Enumerated because
+# the line is "does the name carry a modifier", which is a question about Japanese: a pattern
+# loose enough to keep 「魔術師の遺骸」 also keeps 「燻る騎士の遺骸」, whose 燻る is exactly the
+# description that disqualifies it. 「古い遺骸」 is here by decision — an adjective, and basic.
+BASIC_REMAINS = frozenset({
+    "古い遺骸", "暁の遺骸", "黎明の遺骸",
+    "戦士の遺骸", "騎士の遺骸", "僧侶の遺骸", "盗賊の遺骸", "魔術師の遺骸",
+    "冒険者の遺骸Ⅰ", "冒険者の遺骸Ⅱ",
+})
+
+
+def is_npc_gear(name: str) -> bool:
+    """Somebody else's weapon. 「◯◯用」 is "for the use of ◯◯" and is always bracketed.
+
+    The bracket is what separates an OWNER from a description: 「ドラゴンスレイヤー（片手）」 is
+    a real player weapon whose bracket says one-handed. Rank was tried first and is weaker —
+    it catches the twelve at rank 0 and misses 短剣（陽炎の忍者用） at rank 5.
+    """
+    return "用" in name and ("）" in name or ")" in name)
+
+
+def is_described_remains(name: str, places=()) -> bool:
+    """A named character's remains, as opposed to loot.
+
+    Remains that START WITH A PLACE are the dungeon's, not a person's:
+    「薬種の古跡の古い遺骸」 and 「導きの霊廟の遺骸」 are the same thing as the 「〜のガラクタ」
+    beside them, junk named after where it was found.
+    """
+    if "遺骸" not in name or name in BASIC_REMAINS:
+        return False
+    return not any(name.startswith(place) for place in places)
+
+
+def dungeon_places() -> set:
+    """Every place the game names — the client's own table, and the catalogue beside it.
+
+    Two sources: the built-in table exists so the picker works with no data file at all, and
+    `catalog.<locale>.json` is the fuller list the picker prefers when it is there.
+    「導きの霊廟」 is in the catalogue and not in the code, which is the case that needs it.
+    """
+    from .dungeons import DUNGEONS
+
+    places = {d.get("ja") for d in DUNGEONS.values() if d.get("ja")}
+    try:
+        from .config import data_dir
+
+        catalogue = Path(data_dir()) / "catalog.ja.json"
+        if catalogue.exists():
+            def walk(node):
+                if isinstance(node, dict):
+                    for key, value in node.items():
+                        if key in ("name", "dungeon_name", "floor_name") and isinstance(value, str):
+                            places.add(value)
+                        walk(value)
+                elif isinstance(node, list):
+                    for value in node:
+                        walk(value)
+
+            walk(json.loads(catalogue.read_text(encoding="utf-8")))
+    except Exception:                                      # noqa: BLE001
+        # A catalogue that cannot be read costs a slightly shorter list of places, which
+        # costs a couple of remains being treated as a person's. It must not cost a session.
+        log.debug("wddrop: the catalogue could not be read for place names", exc_info=True)
+    # Two characters is not a place, it is a coincidence waiting to match a name.
+    return {p for p in places if len(p) >= 3}
+
+
+def droppable(entries) -> list:
+    """The names a dungeon can produce, in the order given, deduplicated.
+
+    Takes vocabulary entries (anything with `.name`, `.item_type`, `.identification`).
+    """
+    places = dungeon_places()
+    out, seen = [], set()
+    for entry in entries:
+        name = getattr(entry, "name", None)
+        if not name or name in seen:
+            continue
+        kind = getattr(entry, "item_type", None)
+        if getattr(entry, "identification", None) is not None:
+            if is_npc_gear(name):
+                continue
+        elif kind in NOT_FROM_A_DUNGEON:
+            continue
+        elif kind == "Item::Junk" and (
+                any(marker in name for marker in NOT_FROM_A_DUNGEON_JUNK)
+                or is_described_remains(name, places)):
+            continue
+        seen.add(name)
+        out.append(name)
+    return out

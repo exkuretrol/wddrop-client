@@ -46,6 +46,9 @@
 - 十字鎬數量（這是你自己的庫存，只留在本機）
 - 任何可直接識別個人身分的資訊
 
+### 4b. 唯一一個不是送給我們的連線
+視窗開啟時，程式會向 GitHub 查詢一次是否有新版本，讓一個已知會讀錯畫面的版本能夠告訴你該換掉它。這個請求不會夾帶任何關於你、你的記錄或你遊戲的資料，只有任何網路請求都會有的 IP 位址與這個程式的版本。在「設定 → 新版本」關掉它，這個請求就完全不會送出。
+
 ### 5. 分享是選擇性的
 **記錄與分享是兩件事。** 不論你是否選擇分享，所有紀錄都會存在你自己的電腦上；分享只決定是否「另外送一份」到統計伺服器。此選項預設關閉，第一次啟動時會明確詢問，之後也可以隨時在「設定」中改變。
 
@@ -87,6 +90,8 @@ This is an **unofficial, fan-made** statistics tool with **no affiliation to or 
 **Collected:** item name and quantity — plus whether that quantity was printed on screen or assumed to be 1 because the game printed none — acquisition source (chest, mining, junk reversal), equipment name / quality (★1–5) / level (1–5) when the drop is equipment, dive elapsed time, chest index within the dive, how the session ended, dungeon and floor ids, UTC timestamp, timezone offset and clock skew, a random anonymous install id, client version, locale, capture mode, and recognition-quality signals.
 
 **Never collected:** credentials, session keys, player name or code, friends, chat, character data, currency, inventory, purchase history, screenshots, your pickaxe count, or any personally identifying information.
+
+**One request that is not to us.** When the window opens, the client asks GitHub whether a newer version has been released, so that a build known to read the screen wrongly can tell you to replace it. That request carries nothing about you, your records or your game — only what any web request carries, an IP address and the client's version. Turn it off in *Settings → New versions* and it is not made at all.
 
 **Sharing is separate from recording, and is off until you turn it on.** Everything is recorded on your own computer either way; sharing only decides whether a copy is also sent. If you turn on *Keep the frames*, the captured images are stored in a folder on your computer so a mistake can be re-read and fixed later — **they are never uploaded**.
 

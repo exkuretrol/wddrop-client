@@ -30,6 +30,7 @@ log = logging.getLogger("wddrop.cli")
 from wddrop_schema.models import CaptureMode
 
 from .config import ClientConfig, config_dir, data_dir
+from .items import droppable
 from .consent import ConsentRequired, disclaimer_hash, disclaimer_text
 from .uploader import upload_spool
 
@@ -93,7 +94,21 @@ def _band_font_candidates(args) -> list[str]:
     and spacing entirely. See _band_source for which face is which.
     """
     named = getattr(args, "band_fonts", None)
-    return [str(named)] if named else _font_candidates(args)
+    if named:
+        return [str(named)]
+    # BOTH FACES, twin first, and the SCORE decides. The band is drawn in the scenario face
+    # and the panel in the base one, but "which file is which" is a property of how the
+    # atlas was built on this machine, and a calibration that guesses wrong produces a
+    # profile that fails its own self-check with nothing saying why. Measured on a real
+    # 1920x1080 shot, fitting 「モニヨン銀貨」 in the band:
+    #
+    #     scenario 22px -0.3   0.806      base 21px +1.0   0.759
+    #     scenario 21px +1.0   0.758      base 22px -0.3   0.742
+    #
+    # Sweeping both costs one more pass over a handful of sizes and removes the guess.
+    candidates = _font_candidates(args)
+    twins = [_scenario_beside(path) for path in candidates]
+    return list(dict.fromkeys([t for t in twins if t] + candidates))
 
 
 def _band_source(args, panel_font: str) -> str:
@@ -280,7 +295,9 @@ def cmd_calibrate(cfg: ClientConfig, args) -> int:
     from .calibration import fit_hud, fit_message_profile
 
     vocab, fmt, raw = _load_vocab(args)
-    names = [e.name for e in vocab.entries]
+    # The same answer space the runner uses: calibration reads a real chest drop, so a name
+    # that cannot come out of a chest cannot be the one in the shot either.
+    names = droppable(vocab.entries)
     prefix = _prefix_from(fmt)
 
     if not args.drop_shot:
@@ -316,7 +333,12 @@ def cmd_calibrate(cfg: ClientConfig, args) -> int:
     shot = Image.open(args.drop_shot)
     print(f"[*] fitting from {args.drop_shot} ({shot.size[0]}x{shot.size[1]}), name={args.name!r}")
     profile = fit_message_profile(
-        shot, args.name, prefix, _font_candidates(args), names, locale=args.locale,
+        # THE BAND'S OWN FACE, not the panel's. `_band_font_candidates` was written for
+        # exactly this and was never wired in here: calibration fitted the message band
+        # against whatever `--fonts` named — the panel's atlas — scored badly, failed its
+        # own self-check, and saved nothing. On a 1920x1080 shot that is the difference
+        # between 0.806 and a fit the recogniser then refuses to read the frame with.
+        shot, args.name, prefix, _band_font_candidates(args), names, locale=args.locale,
         suffix=_suffix_from(fmt), separator=_separator_from(raw),
     )
     print(f"[+] band={profile.message_band} font={Path(profile.font_path).name} "
@@ -547,7 +569,16 @@ def _build_runner(cfg: ClientConfig, args, size=None):
     profile = _select_profile(args, size)
     vocab, fmt, raw = _load_vocab(args)
     prefix = _prefix_from(fmt)
-    names = [e.name for e in vocab.entries]
+    # WHAT A DUNGEON CAN HAND YOU, not the whole vocabulary: 2,154 names of 3,268. The rest
+    # is weight — rendered once, held in memory, and correlated against every line — and an
+    # answer space a third larger is also a third more chances for a wrong name to win.
+    #
+    # Safe because the two places the client reads are two specific game strings:
+    # `DungeonTreasure@DropItem` in the band and `Common@GetItem` in the mining panel. A
+    # quest reward is `Scenario@ObtainItemGet` and reaches neither. See
+    # items.NOT_FROM_A_DUNGEON, and note that every item ever recorded — 75 records over
+    # nine sessions, chests and veins — survives this filter.
+    names = droppable(vocab.entries)
 
     # `--fonts` overrides what the profile was calibrated against, which is how a font and
     # an atlas can be compared on the same recording. It was previously accepted here and
@@ -653,32 +684,15 @@ def _describe(event: dict, hints=None) -> str:
 
 
 def _capture_strips(profile, record: bool, mining: bool = True):
-    """Only the regions actually read, unless frames are being recorded.
+    """The regions live capture grabs — defined in `preview`, so the picture the window can
+    draw of them and the pixels this actually asks for are the same list.
 
-    Recording needs whole frames to be replayable; live capture does not, and grabbing a few
-    strips instead of the whole window is what makes a high sample rate affordable.
-
-    THE STRIPS ARE THE READABLE WORLD. Everything outside them is composited as black, so a
-    region left out here is not "read less accurately" — it does not exist. Mining reports in
-    a centred panel, and leaving that band out meant mining could never be detected in a live
-    session at all, while working perfectly on a recording (which has whole frames). It cost
-    a real session to find, and it is the reason this function takes `mining` rather than
-    quietly assuming the message band is the only place the game speaks.
+    A preview that keeps its own idea of the regions is a picture that can disagree with the
+    program while looking authoritative, which is worse than not having one.
     """
-    if record:
-        return None
-    top, bottom = tuple(profile.message_band)
-    w, h = tuple(profile.frame_size)
-    strips = [(0, max(0, top - 4), w, min(h, bottom + 4) - max(0, top - 4))]
-    if profile.hud_region:
-        l, t, r, b = profile.hud_region
-        strips.append((int(l * w), int(t * h), int((r - l) * w) + 1, int((b - t) * h) + 1))
-    if mining:
-        from .capture.panel import SEARCH_BOTTOM, SEARCH_TOP
+    from .preview import strips
 
-        panel_top = int(h * SEARCH_TOP)
-        strips.append((0, panel_top, w, int(h * SEARCH_BOTTOM) - panel_top))
-    return strips
+    return strips(profile, record, mining)
 
 
 def cmd_run(cfg: ClientConfig, args) -> int:
@@ -817,15 +831,25 @@ def cmd_probe(cfg: ClientConfig, args) -> int:
     from .capture.hud import HudDetector, crop_region
     from .capture.source import open_source
 
+    from .preview import annotate, as_capture_sees
+
     profile = Profile.load(_data_path(args, PROFILE_NAME))
     frame = next(open_source(args.source, fps=1).frames()).image.convert("L")
     out = _data_path(args, "probe")
     out.mkdir(parents=True, exist_ok=True)
     frame.save(out / "frame.png")
+    # THE TWO PICTURES, because the crops below answer neither question on their own: they
+    # show what each region CONTAINS, and say nothing about where it sits or whether capture
+    # grabs it at all. A HUD template that is a photograph of a rock face looks like a
+    # perfectly good crop; it is only obviously wrong once the box is drawn on the frame.
+    annotate(frame, profile).save(out / "regions.png")
+    as_capture_sees(frame, profile).save(out / "as_captured.png")
 
     print(f"frame        {frame.size[0]}x{frame.size[1]}   profile {tuple(profile.frame_size)}")
     if tuple(frame.size) != tuple(profile.frame_size):
         print("  [!] RESOLUTION MISMATCH — nothing below will be meaningful")
+    print(f"  look at     {out / 'regions.png'}      where it looks")
+    print(f"              {out / 'as_captured.png'}  what it gets, live")
 
     from .calibration import decode_template
 
@@ -861,7 +885,7 @@ def cmd_probe(cfg: ClientConfig, args) -> int:
             make_renderer(profile.resolve_font(near=_data_path(args, PROFILE_NAME).parent),
                           profile.font_size, tuple(profile.window),
                           getattr(profile, "letter_spacing", 0.0)),
-            _prefix_from(fmt), [e.name for e in vocab.entries],
+            _prefix_from(fmt), droppable(vocab.entries),
             shifts=centred_shifts(tuple(profile.offset), 1),
         )
         m = rec.recognize(window, observed_ink_width=(box[2] - box[0]) if box else None)
