@@ -17,12 +17,21 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
-# player state, if anyone runs from a checkout
-config.json
-spool.jsonl
-records.jsonl
-closes.jsonl
-profile.json
-profiles.json
-capture/
-tests/local.env
+# Player state, if anyone runs from a checkout. ALL ANCHORED WITH A LEADING SLASH, so each
+# matches the file the player's client writes at the root and nothing else.
+#
+# `capture/` was not, and an unanchored directory pattern matches at EVERY depth: it caught
+# `client/wddrop_client/capture/` — the recogniser itself, eleven files — so the published
+# repository contained a client with no glyph matcher, no panel reader and no message
+# parser in it. Nothing local could show that, because the files are on disk either way; it
+# took the first CI run on a real checkout, which is also the first time this repository had
+# a remote to run one.
+/config.json
+/spool.jsonl
+/records.jsonl
+/closes.jsonl
+/profile.json
+/profiles.json
+/capture/
+/logs/
+/tests/local.env
