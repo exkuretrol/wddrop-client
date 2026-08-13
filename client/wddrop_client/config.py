@@ -24,7 +24,11 @@ from .consent import ConsentState
 log = logging.getLogger("wddrop.config")
 
 APP_NAME = "wddrop"
-CLIENT_VERSION = "0.5.1"
+# Stamped onto every event as the build that READ it, and asked about by the ingest server as
+# the build that is SENDING. The release tag must say the same thing — CI refuses a tag that
+# disagrees, because a client that under-reports itself would be refused after the fix that
+# made it acceptable, and one that over-reports would be admitted before it.
+CLIENT_VERSION = "0.5.2"
 
 
 def config_dir() -> Path:
