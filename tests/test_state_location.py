@@ -90,7 +90,15 @@ def test_data_files_are_not_treated_as_state(home, tmp_path):
 
 def test_the_program_folder_is_still_searched_for_its_own_data(monkeypatch, tmp_path):
     """State moved out; the vocabulary did not. A client launched from a shortcut has some
-    other working directory, and must still find the files shipped beside it."""
+    other working directory, and must still find the files shipped beside it.
+
+    Skipped without the GUI toolkit rather than failing: `find_data` lives in `ui`, which
+    imports PySide6 at module level, and PySide6 is deliberately not installed where the
+    capture path is tested — an 80MB toolkit must never become a requirement of reading the
+    screen. CI is exactly that environment, and this was the one test that assumed otherwise.
+    """
+    pytest.importorskip("PySide6.QtWidgets", reason="Qt not installed")
+
     from wddrop_client import ui
 
     monkeypatch.setenv("WDDROP_HOME", str(tmp_path / "elsewhere"))
