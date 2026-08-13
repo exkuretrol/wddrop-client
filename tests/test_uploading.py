@@ -301,3 +301,125 @@ def test_an_unknown_place_is_blank_rather_than_a_number(tmp_path, home):
     out = tmp_path / "mine.csv"
     export_csv(records_path(), out, [], names={})
     assert "9999" not in out.read_text(encoding="utf-8-sig")
+
+
+# -- a build that reads the screen wrongly is refused, and loses nothing ------------------
+#
+# A client that under-reads does not fail loudly: it uploads a chest with two of its three
+# items and the row looks exactly like a chest that held two. Up to 0.5.1 that was real —
+# the mining panel was rendered at the message band's letter spacing and every item name
+# long enough for the drift to matter went unread. Turning such a build away at the door is
+# the only thing that stops more of it arriving.
+#
+# The whole design rests on the refusal costing the player NOTHING, so that is what these
+# check: the spool survives intact, and the run says which version to get.
+
+
+class Old(Stub):
+    """An ingest server that has raised its floor above the client asking."""
+
+    seen_versions: list = []
+
+    def do_POST(self):                                            # noqa: N802 (http.server)
+        length = int(self.headers.get("content-length", 0))
+        self.rfile.read(length)
+        if self.path.endswith("/v1/events"):
+            type(self).seen_versions.append(self.headers.get("X-Client-Version"))
+            self.send_response(426)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"detail": {
+                "reason": "client_below_minimum", "your_version": "0.5.1",
+                "min_version": "0.5.2", "latest_version": "0.5.3",
+                "message": "update and your records will send"}}).encode())
+            return
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps({"updated": 1}).encode())
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def stale_server():
+    Old.seen_versions = []
+    httpd = HTTPServer(("127.0.0.1", 0), Old)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield Old, f"http://127.0.0.1:{httpd.server_address[1]}"
+    httpd.shutdown()
+
+
+def test_a_refused_client_keeps_every_record(stale_server, home):
+    """THE POINT OF THE WHOLE MECHANISM. Refusing an upload is only acceptable because it
+    delays records rather than losing them — updating has to release the backlog, so the
+    outbox must come through untouched."""
+    from wddrop_client.config import spool_path
+
+    _stub, url = stale_server
+    spool_write(spool_path(), an_event("蒼雫の鉱石"), an_event("透明な小石"))
+
+    result = upload_spool(config(url), CaptureMode.OCR)
+
+    assert result["uploaded"] == 0
+    assert result["remaining"] == 2, "records were dropped by a refusal"
+    assert spool_path().read_text(encoding="utf-8").count("\n") == 2
+    assert result["blocked"]["min_version"] == "0.5.2"
+    assert result["blocked"]["latest_version"] == "0.5.3"
+
+
+def test_the_running_version_is_what_is_asked_about(stale_server, home):
+    """The floor is about who is SENDING. The events carry the version that read them, which
+    after an update is a different, older number — testing that one would strand the backlog
+    permanently, because updating cannot change what already happened."""
+    from wddrop_client.config import CLIENT_VERSION, spool_path
+
+    stub, url = stale_server
+    # An event captured by a much older build than the one running now.
+    old = an_event("蒼雫の鉱石")
+    old["client_version"] = "0.4.0"
+    spool_write(spool_path(), old)
+
+    upload_spool(config(url), CaptureMode.OCR)
+
+    assert stub.seen_versions == [CLIENT_VERSION]
+
+
+def test_the_version_that_read_an_event_travels_with_it(server, home):
+    """Stamped when the event is captured, not when it is sent. A spool recorded before an
+    update and drained after it would otherwise be filed under the newer version — which
+    would let a build known to under-read launder its rows into looking like one that does
+    not."""
+    from wddrop_client.config import spool_path
+
+    stub, url = server
+    captured = an_event("蒼雫の鉱石")
+    captured["client_version"] = "0.4.0"
+    spool_write(spool_path(), captured, an_event("透明な小石"))   # the second has no stamp
+
+    upload_spool(config(url), CaptureMode.OCR)
+
+    versions = [e["capture"]["client_version"] for e in stub.events]
+    assert "0.4.0" in versions, "the capturing version was overwritten by the sending one"
+    # A line spooled before this existed has no honest answer but the running version.
+    from wddrop_client.config import CLIENT_VERSION
+
+    assert CLIENT_VERSION in versions
+
+
+def test_a_refusal_still_sends_the_dive_endings(stale_server, home):
+    """`stop_reason` backfills rows the server ALREADY accepted, and it is the check on
+    outcome-dependent stopping — the study's main confound. Withholding it would degrade
+    data that is already stored to punish a client for a fault it cannot fix by sulking."""
+    from wddrop_client.config import spool_path
+
+    _stub, url = stale_server
+    dive = str(uuid.uuid4())
+    spool_write(spool_path(), an_event("蒼雫の鉱石", dive_id=dive))
+    record_close(dive, "user_stop")
+
+    result = upload_spool(config(url), CaptureMode.OCR)
+
+    assert result["blocked"]
+    assert result["closed"] == 1

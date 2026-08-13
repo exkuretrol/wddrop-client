@@ -43,9 +43,19 @@ def hydrate(raw: dict, cfg: ClientConfig, mode: CaptureMode) -> DropEvent:
     raw = dict(raw)
     raw["install_id"] = cfg.install_id
     raw.setdefault("tz_offset_minutes", _local_offset_minutes())
+    # THE VERSION THAT READ IT, NOT THE ONE SENDING IT. These are the same thing only when
+    # the spool drains in the same run that filled it. A player who records one evening,
+    # updates a week later and uploads afterwards produced those readings with the OLD
+    # build — and stamping the running version here filed them under the new one, which is
+    # the worst direction to be wrong in: a build known to under-read would launder its
+    # records into looking like a build that does not.
+    #
+    # Falls back to the running version for a line spooled before this was written, which
+    # is the only honest answer available for it.
+    captured = raw.pop("client_version", None) or CLIENT_VERSION
     raw["capture"] = CaptureInfo(
         mode=mode,
-        client_version=CLIENT_VERSION,
+        client_version=captured,
         locale=cfg.locale,
         qc=raw.pop("qc", {}) or {},
     ).model_dump()
@@ -172,6 +182,7 @@ def upload_spool(cfg: ClientConfig, mode: CaptureMode, *, spool: Path | None = N
             log.warning("wddrop: unparseable spool line kept for retry: %s", exc)
 
     uploaded = rejected = 0
+    blocked: dict | None = None
     sent: set[str] = set()
     with httpx.Client(timeout=30) as client:
         for i in range(0, len(events), BATCH_SIZE):
@@ -180,7 +191,22 @@ def upload_spool(cfg: ClientConfig, mode: CaptureMode, *, spool: Path | None = N
                 resp = client.post(
                     f"{cfg.server_url.rstrip('/')}/v1/events",
                     json=IngestBatch(events=chunk).model_dump(mode="json"),
+                    # Who is SENDING, which is not who read: an event carries the version
+                    # that captured it, and after an update those differ for everything
+                    # still in the spool. The server's floor is about the sender.
+                    headers={"X-Client-Version": CLIENT_VERSION},
                 )
+                if resp.status_code == 426:
+                    # THIS BUILD IS NOT ALLOWED TO UPLOAD, because it reads some drops
+                    # wrongly. Stop draining and keep every line: the spool is untouched,
+                    # so updating releases the whole backlog. Carrying on to the next batch
+                    # would be a loop against a server that has already said no.
+                    blocked = _blocked_detail(resp, CLIENT_VERSION)
+                    log.warning("wddrop: this client is too old to upload — update to %s. "
+                                "Nothing was lost; %d record(s) are waiting.",
+                                blocked.get("latest_version") or "the latest version",
+                                len(events) - len(sent))
+                    break
                 resp.raise_for_status()
                 body = resp.json()
                 uploaded += body.get("accepted", 0)
@@ -195,9 +221,39 @@ def upload_spool(cfg: ClientConfig, mode: CaptureMode, *, spool: Path | None = N
                 log.warning("wddrop: batch upload failed, will retry next run: %s", exc)
 
     remaining = _keep_unsent(path, sent)
+    # The dive endings are still sent. They BACKFILL rows the server already accepted from
+    # an older build, and `stop_reason` is the check on outcome-dependent stopping — the
+    # study's main confound. Withholding it would degrade data that is already stored, to
+    # punish a client for a reading fault that has nothing to do with it.
     closed = drain_closes(cfg)
-    return {"uploaded": uploaded, "remaining": remaining, "rejected": rejected,
-            "closed": closed}
+    result = {"uploaded": uploaded, "remaining": remaining, "rejected": rejected,
+              "closed": closed}
+    if blocked:
+        result["blocked"] = blocked
+    return result
+
+
+def _blocked_detail(resp, running: str) -> dict:
+    """What the server said about why, in a shape the window can show.
+
+    Defensive about the body: this is the one response the client must handle correctly
+    while being, by definition, an OLD build talking to a NEWER server. If the shape has
+    moved on since it was written, "you need to update" is still the right message and is
+    what it falls back to.
+    """
+    detail: dict = {}
+    try:
+        body = resp.json()
+        detail = body.get("detail") if isinstance(body.get("detail"), dict) else {}
+    except Exception:                                      # noqa: BLE001
+        detail = {}
+    return {
+        "reason": detail.get("reason", "client_below_minimum"),
+        "your_version": detail.get("your_version", running),
+        "min_version": detail.get("min_version"),
+        "latest_version": detail.get("latest_version") or detail.get("min_version"),
+        "message": detail.get("message", ""),
+    }
 
 
 def record_marker(marker: dict, path=None) -> None:

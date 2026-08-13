@@ -1,6 +1,7 @@
 name: release
 
-# Tag a version to publish one:  git tag v0.1.3 && git push --tags
+# Tag a version to publish one:  git tag v0.5.2 && git push --tags
+# The tag and CLIENT_VERSION must agree — see the check in the `test` job for why.
 on:
   push:
     tags: ["v*"]
@@ -17,6 +18,32 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      # THE TAG AND THE BUILD MUST AGREE ABOUT WHICH VERSION THIS IS.
+      #
+      # Nothing else enforces it: the tag is typed by hand and CLIENT_VERSION is edited by
+      # hand, so a release can ship an exe that reports the PREVIOUS version. That used to
+      # cost a wrong number in a log. It costs more now — the ingest server refuses uploads
+      # from builds below a floor, and the floor is named in these numbers. A build that
+      # under-reports itself would be refused after the fix that made it acceptable; one
+      # that over-reports would be admitted before it.
+      #
+      # Checked on tag pushes only, so `workflow_dispatch` still builds whatever is on the
+      # branch without a tag having to exist.
+      - name: The tag and CLIENT_VERSION must be the same version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          in_code=$(python -c "import re,pathlib;\
+          print(re.search(r'CLIENT_VERSION\s*=\s*\"([^\"]+)\"',\
+          pathlib.Path('client/wddrop_client/config.py').read_text()).group(1))")
+          echo "tag=$tag  CLIENT_VERSION=$in_code"
+          if [ "$tag" != "$in_code" ]; then
+            echo "::error::tag v$tag would ship a client that calls itself $in_code."\
+                 "Bump CLIENT_VERSION in client/wddrop_client/config.py, or retag."
+            exit 1
+          fi
+
       - run: pip install pytest pillow numpy pydantic httpx mss
       # Most tests need the data files or a recording and skip without them. The ones that
       # run here are the ones that need neither, which is still the majority of the logic.
@@ -28,15 +55,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The three files the client needs and this repository does not carry:
+      # The files the client needs and this repository does not carry:
       #
-      #   vocab.<locale>.json     the item names, from the game's own item table
-      #   catalog.<locale>.json   the dungeon and floor names, from the game's own assets
-      #   atlas.zh_tw.json/.png   the glyphs, rendered from the game's own font
+      #   vocab.ja.json           the item names, from the game's own item table
+      #   catalog.ja.json         the dungeon and floor names, from the game's own assets
+      #   names.<locale>.json     those names in the window's language
       #
-      # All three are derived from the game rather than written here, so they live in a
-      # private repository and are fetched only for the length of the build. boosts.json is
-      # NOT among them: the client has never read it, it belongs to the server.
+      # All are derived from the game rather than written here, so they live in a private
+      # repository and are fetched only for the length of the build.
+      #
+      # NOT THE GLYPH ATLAS. It is the game's own typeface rendered, and since client 0.5.0
+      # it is not shipped at all: the client builds it on the player's machine from the copy
+      # of the game they already have. Only `.json` is copied below, and the atlas pair is
+      # deleted afterwards — so a stray copy appearing in the data repository cannot quietly
+      # find its way back into a build. boosts.json is excluded for a different reason: the
+      # client has never read it, it belongs to the server.
       - name: Fetch the data files
         uses: actions/checkout@v4
         with:
@@ -46,9 +79,10 @@ jobs:
       - name: Put them beside the client
         shell: pwsh
         run: |
-          Copy-Item _data\*.json  . -Force
-          Copy-Item _data\*.png   . -Force
+          Copy-Item _data\*.json . -Force
           Remove-Item _data -Recurse -Force
+          Remove-Item atlas.*.json, atlas.*.png, boosts.json -ErrorAction SilentlyContinue
+          Get-ChildItem *.json | Select-Object -ExpandProperty Name
 
       - uses: actions/setup-python@v5
         with:

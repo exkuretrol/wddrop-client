@@ -9,16 +9,22 @@ whole content list is kept together, because "what did this chest give me" is th
 observation; splitting it into separate rows would lose the fact that they came from one
 roll.
 
+THE GAME IS IN JAPANESE. Since client 0.5.0 the recogniser reads one language, because it
+is the only one whose face renders from the files the game already installed — so every
+name on this wire is a Japanese name and `locale` is `ja` on every event.
+
 Confirmed against both sources, which agree exactly:
   * API  `received_contents: [{content_id, content_type, quantity, boost_id}]`
-  * UI   one message line per item: 「獲得了<name> × <qty>！！」
-    e.g. 「獲得了蒼藍礦石 × 3！！」 -> content_id 20000001, Item::SaleOnly
+  * UI   one message line per item, `DungeonTreasure@DropItem` + `Common@NameAndQuantity`:
+    e.g. 「蒼雫の鉱石×3を手に入れた!!」 -> content_id 20000001, Item::SaleOnly
+    Mining announces the same acquisition differently, `Common@GetItem` 「{0} を入手した」,
+    which is why it took its own reader.
 
 Two provenances stay distinguishable because they have different published rate tables
 and different confounders:
 
     chest_direct   contents straight out of a treasure chest
-    junk_reversal  equipment produced by reversing (逆轉) a junk item
+    junk_reversal  equipment produced by reversing a junk item
 
 DESIGN RULES
 ------------
@@ -33,11 +39,38 @@ DESIGN RULES
 
 3. Empty chests count. `contents` may legitimately be an empty list; see the field docs.
 
-4. Unmatched OCR is transmitted, never dropped. If `equipment_id` is None, `raw_text`
-   carries what was actually read so the vocabulary can be repaired later and the event
-   re-resolved server-side. Silently discarding unreadable drops would bias the sample
-   toward whatever OCR happens to find easy — which is exactly the kind of bias this
-   study is trying to measure.
+4. WHAT IS SENT IS WHAT IS STORED. Every field here is filled by the shipping client, and
+   the server's tables carry these columns and no others. A column nothing fills is not a
+   placeholder for a better client — it is a column of NULLs that reads, in a year, as a
+   measurement that was taken and came back empty.
+
+KNOWN LIMIT, AND IT IS NOT SOLVED BY THIS FORMAT
+------------------------------------------------
+The recogniser matches a CLOSED vocabulary and refuses anything under threshold, so a line
+it cannot place is never emitted at all. Unreadable drops are therefore silently absent,
+which biases the sample toward whatever renders cleanly — the very kind of bias this study
+measures. `match_confidence` bounds it from above (how close the accepted readings run to
+the gate); the local review queue holds near-miss lines for a human. Neither is a record of
+the drop that got away.
+
+This docstring used to claim the opposite — that unmatched OCR was transmitted with its
+`raw_text` for later repair. That was true of `capture/ocr.py:resolve_line()`, which is not
+on the live path and never was: both emit paths reconstruct their text from the name they
+already recognised, so `raw_text` restated `item_name` through a template and no unmatched
+line ever reached it.
+
+REMOVED, DELIBERATELY (2026-08-13), so that re-adding one is a decision and not a rediscovery
+--------------------------------------------------------------------------------------------
+    raw_text                     reconstructed from item_name; never the pixels read
+    item_type                    a pure function of item_id in the vocabulary — join for it
+    equipment_name               likewise, of equipment_identification
+    equipment_id                 the exact row is never resolvable from a display name
+    quality, level               nothing reads ★ or 等級 off the screen yet
+    source_junk_name/_id         no capture emits `junk_reversal`
+    game_version                 no screen the recogniser reads shows it. It remains a
+                                 COLUMN on the server, stamped over a date range as each
+                                 build's live date is learned (`wddrop_server/versions.py`)
+Each comes back the day something fills it, with the capture that fills it.
 """
 from __future__ import annotations
 
@@ -45,9 +78,12 @@ import enum
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
-SCHEMA_VERSION = 1
+# 2 = the ja-only trim: raw_text, item_type, equipment_name/_id, quality, level,
+# source_junk_name/_id and game_version left the wire because nothing filled them. Bumped
+# rather than changed quietly, so a batch that predates the trim is identifiable as one.
+SCHEMA_VERSION = 2
 
 
 class CaptureMode(str, enum.Enum):
@@ -104,17 +140,21 @@ class StopReason(str, enum.Enum):
 class ReceivedItem(BaseModel):
     """One line of a chest's contents — junk, sale-only, valuable, or equipment.
 
-    Item identity comes from the game's own item table (`item_type` is its `type`
-    field, e.g. Item::Junk / Item::SaleOnly). Quality and level apply only to equipment
-    and stay None for everything else.
+    Identity is an ID, not a string: `item_id` for an item, `equipment_identification` for a
+    piece of equipment, exactly one of them, and neither when the name did not resolve. The
+    item's TYPE (Item::Junk / Item::SaleOnly / ...) is not carried here because it is a
+    function of `item_id` in the same vocabulary the client matched against — the analysis
+    joins for it rather than trusting a copy that can disagree.
     """
 
-    item_name: str = Field(description="As displayed, in the client's locale.")
+    item_name: str = Field(
+        description=(
+            "The Japanese name as displayed. Kept beside the id because it is what was "
+            "actually on screen, and because it is the only identity an unresolved line has."
+        ),
+    )
     item_id: int | None = Field(
         default=None, description="The game's own item id."
-    )
-    item_type: str | None = Field(
-        default=None, description="The game's own item type, e.g. 'Item::Junk', 'Item::SaleOnly'."
     )
     quantity: int = Field(default=1, ge=1)
     # WHETHER THAT NUMBER WAS OBSERVED OR INFERRED. The game prints no "×N" for a single
@@ -134,47 +174,41 @@ class ReceivedItem(BaseModel):
         description="True when the game printed no number and the 1 is an assumption.",
     )
 
-    # -- equipment-only fields (None for junk / sale-only) --------------------------
-    equipment_name: str | None = Field(
-        default=None, description="Set only when this line is a piece of equipment."
-    )
-
+    # -- equipment-only field (None for junk / sale-only) ---------------------------
+    #
     # A displayed name does NOT identify a single equipment row. In the game's own table
     # 826 distinct names span 3,719 rows; rows sharing a name differ only by
     # grade_lottery_id / rarity_lottery_id and share one `identification` value. So the
-    # name resolves to a FAMILY (`identification`), and the observed quality/level is what
-    # pins down the variant. Storing a guessed `equipment_id` here would be fabricated
-    # precision, so the family is the resolved key and the exact row stays optional.
+    # name resolves to a FAMILY, and it is the observed quality/level that would pin down
+    # the variant — which nothing reads off the screen today. Sending a guessed
+    # `equipment_id` would be fabricated precision, so the family is the only key here.
     equipment_identification: int | None = Field(
         default=None,
         description="The equipment family key, which is stable where the display name is not.",
     )
-    equipment_id: int | None = Field(
-        default=None,
-        description="Exact equipment row, only when the source gives it unambiguously.",
-    )
-    quality: int | None = Field(default=None, ge=1, le=5, description="品質 ★1-5")
-    level: int | None = Field(default=None, ge=1, le=5, description="等級 1-5")
 
-    # Optional but high-value: the published rate table is conditioned on WHICH junk was
-    # reversed. Without it we can still compare time buckets against each other; with it
-    # every observation gets an absolute expected distribution to be tested against.
-    # Only meaningful when provenance == JUNK_REVERSAL.
-    source_junk_name: str | None = None
-    source_junk_id: int | None = None
-
+    # HOW CLOSE THIS READING RAN TO THE GATE. Every line here was already accepted, so this
+    # does not separate right from wrong — it is the distribution that says whether a
+    # player's machine is reading comfortably or scraping the threshold, on hardware nobody
+    # here can inspect. It is the only recognition-quality signal that survives the client.
     match_confidence: float | None = Field(
         default=None, ge=0.0, le=1.0,
-        description="Render-and-compare match score for this line.",
+        description="Render-and-compare match score for this line, where the reader has one.",
     )
-    raw_text: str | None = Field(
-        default=None,
-        description=(
-            "The raw message line as read (e.g. '獲得了蒼藍礦石 × 3！！'), retained when the "
-            "match failed or was low-confidence so the vocabulary can be repaired and the "
-            "event re-resolved server-side."
-        ),
-    )
+
+    @model_validator(mode="after")
+    def _one_identity_at_most(self) -> "ReceivedItem":
+        """A line is an item, or a piece of equipment, or unresolved — never two of those.
+
+        The capture client cannot produce both (`ItemIndex.identify` returns one key or
+        neither), so this is about anything else that speaks this API. Refused HERE, where it
+        costs a 422 naming the field, rather than only at the database's own constraint:
+        that one fires at COMMIT, which is after every other event in the batch has been
+        written, so it would turn one malformed line into a 500 that loses the whole batch.
+        """
+        if self.item_id is not None and self.equipment_identification is not None:
+            raise ValueError("a line cannot be both an item and a piece of equipment")
+        return self
 
 
 class DiveContext(BaseModel):
@@ -210,8 +244,19 @@ class DiveContext(BaseModel):
 class CaptureInfo(BaseModel):
     mode: CaptureMode
     client_version: str
-    game_version: str | None = None
-    locale: str = Field(default="zh_tw", description="Client display locale, e.g. zh_tw/ja/en.")
+    # THE GAME'S LANGUAGE, NOT THE WINDOW'S. Fixed at "ja" since client 0.5.0 — the window
+    # still speaks six languages (`ui_locale`, which is never sent), but the recogniser
+    # reads one, so this describes which vocabulary produced the names in `contents`.
+    #
+    # The default was "zh_tw" until 2026-08-13, which was a live way to mislabel data: the
+    # shipping client always sends this field, so the default only fired for an event that
+    # omitted it — an old build's batch, a hand-rolled client — and those were stored, in a
+    # NOT NULL column, as a language this client can no longer read a single name in.
+    #
+    # Left as `str` rather than Literal["ja"] on purpose: a stricter type would REJECT a
+    # 0.4.x client's batch outright, and losing a player's records is worse than knowing
+    # they came from an older vocabulary.
+    locale: str = Field(default="ja", description="Game language the names were read in.")
     # Free-form QC signals (screen resolution, detector version, template set hash...).
     qc: dict[str, str | int | float | bool] = Field(default_factory=dict)
 

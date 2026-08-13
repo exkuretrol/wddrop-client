@@ -1,6 +1,6 @@
 [project]
 name = "wddrop-client"
-version = "0.1.6"
+version = "0.5.1"
 description = "Wizardry Daphne drop recorder — reads the game's own messages off your screen"
 requires-python = ">=3.11"
 dependencies = [
@@ -17,6 +17,10 @@ dependencies = [
 # engine whose accuracy varies by installed language packs would put a per-player bias into
 # the measurements themselves.
 ocr = ["pillow>=10", "numpy>=1.26", "mss>=9.0"]
+# Reading the game's WINDOW rather than the screen it is drawn on, so anything in front of
+# the game cannot reach the recording. Windows-only and optional: without it capture falls
+# back to `mss`, which is what every recording before this was made with.
+window = ["windows-capture>=2.0; sys_platform == 'win32'"]
 dev = ["pytest>=8"]
 
 [project.scripts]

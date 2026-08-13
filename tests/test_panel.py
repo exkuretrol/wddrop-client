@@ -339,10 +339,16 @@ def _shipped_profile():
 
     from wddrop_client.calibration import Profile
 
-    path = ROOT / "profiles.shipped.json"
-    if not path.exists():
-        pytest.skip("profiles.shipped.json not built")
-    profile = Profile(**json.loads(path.read_text(encoding="utf-8"))["704x1241"])
+    # WRITTEN OUT HERE, not read from profiles.shipped.json. These fixtures are Chinese
+    # panels and a fit is tied to the language it was scored in — but the game language is
+    # fixed at Japanese now and the Chinese fits no longer ship. The geometry is still the
+    # geometry those recordings were made at, so the tests keep their subject by carrying it.
+    profile = Profile(
+        frame_size=(704, 1241), message_band=(1000, 1022), font_path="",
+        font_size=25, offset=(0, 0), calibration_score=0.9014774499379775,
+        letter_spacing=1.1, window=(749, 51), text_x0=91, locale="zh_tw",
+        panel_font_size=24, panel_letter_spacing=1.1,
+        panel_data_version="b5b4fab0494322eb")
     atlas = ROOT / "data" / "atlas.zh_tw.json"
     if not atlas.exists():
         pytest.skip("atlas not built")
@@ -398,3 +404,184 @@ def test_the_warm_index_is_the_one_the_fit_asks_for(_shipped_profile):
                                  _shipped_profile.panel_letter_spacing)
     assert again is not None
     assert dict(runner._mining_indexes) == built, "the fit had to build its own after all"
+
+
+# -- the panel's letter spacing is FITTED, not inherited from the message band ------------
+#
+# 「ウロボロス鉱石」 went unread in session-20260812-171855 while every other line on the same
+# panels read fine. It was rank 1 at 0.5595, under the 0.60 gate, because the panel was being
+# rendered at the BAND's +1.1 letter spacing where it is drawn at +0.0. Spacing is added per
+# CHARACTER, so the error accumulates along the line and the damage is a function of NAME
+# LENGTH — measured on that frame, best alignment per character:
+#
+#     ウ:-1  ロ:-2  ボ:-3  ロ:-4  ス:-5  鉱:-6  石:-7        -1.1px per character
+#
+# and the whole-line scores, same frame, same vocabulary:
+#
+#     25px +1.1   中級鉄鉱石 0.712   透明な小石 0.706   ウロボロス鉱石 0.560   REFUSED
+#     25px +0.0   中級鉄鉱石 0.890   透明な小石 0.895   ウロボロス鉱石 0.847   read
+#
+# Five-character names sail through the wrong geometry, which is why it survived: it shipped
+# in profiles.shipped.json, and every check it had to pass was made with a name too short to
+# fail.
+
+JA_ATLAS = ROOT / "data" / "atlas.ja.json"
+needs_ja = pytest.mark.skipif(not JA_ATLAS.exists(), reason="the Japanese atlas is not built")
+
+
+def _ja_runner(names, panel_fit, band_spacing=1.1, size=25):
+    """A runner with just enough wired up to fit a panel."""
+    from wddrop_client.calibration import Profile
+    from wddrop_client.capture.ocr import MessageFormat
+    from wddrop_client.runner import CaptureRunner
+
+    profile = Profile(
+        frame_size=(704, 1241), message_band=(999, 1020), font_path=str(JA_ATLAS),
+        font_size=size, offset=(-2, 1), calibration_score=0.91, letter_spacing=band_spacing,
+        window=(976, 51), text_x0=93, locale="ja")
+    runner = CaptureRunner.__new__(CaptureRunner)
+    runner.profile = profile
+    runner._mining_names = list(names)
+    runner._mining_indexes, runner._mining_renderers, runner._mining_renderer = {}, {}, None
+    runner._panel_window = (520, 44)
+    runner._panel_fit = panel_fit
+    runner._spacing_fitted = False
+    runner._render_source = str(JA_ATLAS)
+    runner._data_version = "test"
+    runner._profile_path = None
+    runner.mining_prefix = ""
+    runner.mining_min_score = 0.70
+    # 「{0} を入手した」 is the panel's own wording, and 「{0}×{1}」 the quantity form.
+    runner.mining_format = MessageFormat("{0} を入手した", "{0}×{1}")
+    runner.fmt = runner.mining_format
+    return runner
+
+
+def _panel_frame(text, size=25, spacing=0.0, at=(150, 589)):
+    """A frame with one panel line drawn on it, at a known spacing.
+
+    The line is cut to what fits, exactly as `anchor_window` does on a real frame: the
+    comparison window is wider than the space between the panel's left edge and the edge of
+    a 704px screen.
+    """
+    import numpy as np
+
+    from wddrop_client.capture.glyph import make_renderer
+
+    line = make_renderer(str(JA_ATLAS), size, (520, size + 2), spacing).render(text)
+    frame = np.zeros((1241, 704))
+    x, y = at
+    width = min(line.shape[1], frame.shape[1] - x)
+    frame[y:y + line.shape[0], x:x + width] = line[:, :width]
+    return frame
+
+
+@needs_ja
+def test_the_panel_spacing_is_fitted_absolutely_not_offset_from_the_band():
+    """The search used to be offsets from the band's spacing (+-0.3, +-0.6), and an offset
+    search cannot reach a value far from what it is an offset from: from the band's +1.1 it
+    spanned 0.5 to 1.7, and the panel is drawn at +0.0. The right answer was never a
+    candidate — not ranked low, not present."""
+    from wddrop_client.runner import PANEL_SPACINGS
+
+    assert min(PANEL_SPACINGS) <= 0.0 <= max(PANEL_SPACINGS)
+
+    names = ["ウロボロス鉱石", "中級鉄鉱石", "透明な小石", "青銅の両手鎚矛", "銀等級の認識票"]
+    frame = _panel_frame("ウロボロス鉱石 を入手した×3", spacing=0.0)
+    runner = _ja_runner(names, panel_fit=(25, 1.1), band_spacing=1.1)
+
+    best = runner._fit_panel(frame, (589, 610), 25)
+    assert best is not None
+    assert best[2] == pytest.approx(0.0, abs=0.05), (
+        f"fitted spacing {best[2]:+.1f}, which is the band's, not the panel's")
+    assert runner._panel_fit[1] == pytest.approx(0.0, abs=0.05)
+    assert best[5] == "ウロボロス鉱石"
+
+
+@needs_ja
+def test_a_stored_panel_fit_is_still_checked_once():
+    """The wrong spacing SHIPPED, in profiles.shipped.json — the band's value written into
+    the panel's slot, never measured as a panel fit. A stored fit that is trusted forever is
+    what let it survive, so it is measured once per session even when one arrives ready-made.
+    """
+    names = ["ウロボロス鉱石", "中級鉄鉱石", "透明な小石"]
+    frame = _panel_frame("ウロボロス鉱石 を入手した×3", spacing=0.0)
+    runner = _ja_runner(names, panel_fit=(25, 1.1))
+    runner._fit_panel(frame, (589, 610), 25)
+    assert runner._spacing_fitted, "a fit from the profile was taken on trust"
+    assert runner._panel_fit == (25, pytest.approx(0.0, abs=0.05))
+
+    # ...and once only. It describes how this client renders, not the panel in front of it,
+    # so paying for it per swing buys the same number twice.
+    runner._panel_fit = (25, 1.1)
+    runner._fit_panel(frame, (589, 610), 25)
+    assert runner._panel_fit == (25, 1.1), "the spacing was fitted more than once"
+
+
+@needs_ja
+def test_a_sentence_that_starts_with_an_item_name_is_not_that_item():
+    """「北穿の金のつるはしが壊れてしまった」 BEGINS with the pickaxe's own item name, so it is
+    a prefix match in exactly the way a half-drawn line is — and the panel has no termination
+    rule to catch it.
+
+    It was unreachable while the panel's geometry was wrong: the sentence scored 0.653 and
+    was refused, which looked like a guard and was luck. The moment the spacing was fixed,
+    two pickaxe BREAKS were recorded as two mined PICKAXES.
+
+    What separates them is not score — it is that the name accounts for half the ink on the
+    row. Measured over seven recorded sessions: item lines leave 71-168px against names that
+    render 72-169px; the break sentence leaves 421px against a name that renders 221px.
+    """
+    from wddrop_client.capture.glyph import RenderRecognizer, make_renderer
+
+    names = ["北穿の金のつるはし", "ウロボロス鉱石", "透明な小石"]
+    renderer = make_renderer(str(JA_ATLAS), 25, (520, 27), 0.0)
+    index = RenderRecognizer(renderer, "", names)
+    runner = _ja_runner(names, panel_fit=(25, 0.0))
+
+    sentence = renderer.render("北穿の金のつるはしが壊れてしまった")
+    match = index.recognize(sentence)
+    assert match.name == "北穿の金のつるはし", "the prefix does match — that is the problem"
+    assert not runner._row_is_the_name(sentence, match), (
+        "a break message was accepted as a mined pickaxe")
+
+    # The item line it must not become confused with.
+    item = renderer.render("ウロボロス鉱石")
+    assert runner._row_is_the_name(item, index.recognize(item))
+
+
+@needs_ja
+def test_the_long_name_reads_on_the_real_frame():
+    """End to end on the pixels that reported this, rather than on a rendering of them."""
+    import json
+
+    from wddrop_client.capture.glyph import (RenderRecognizer, anchor_window,
+                                             make_renderer, mask_after_name)
+
+    session = paths.capture("session-20260812-171855")
+    frame = (session / "episode-004/f_00005.png") if session else None
+    vocab_path = ROOT / "data" / "vocab.ja.json"
+    if not (frame and frame.exists() and vocab_path.exists()):
+        pytest.skip("the Japanese mining recording is not available")
+
+    raw = json.loads(vocab_path.read_text(encoding="utf-8"))
+    names = list(dict.fromkeys(
+        e["name"] for e in raw["items"] + raw["equipment"] if e.get("name")))
+    gray = load(frame)
+    row, window = (589, 610), (520, 27)
+
+    def read(spacing):
+        renderer = make_renderer(str(JA_ATLAS), 25, window, spacing)
+        crop = anchor_window(gray, row, window)
+        named, _cut = mask_after_name(crop, renderer, " を入手した", "×", dy=1)
+        return RenderRecognizer(renderer, "", names,
+                                shifts=(range(-2, 3), range(-2, 3))).recognize(named)
+
+    fitted = read(0.0)
+    assert fitted.name == "ウロボロス鉱石", (fitted.best, round(fitted.score, 4))
+    assert fitted.score > 0.80 and fitted.margin > 0.10
+
+    # The state this shipped in, kept as the measurement rather than as a memory.
+    inherited = read(1.1)
+    assert inherited.best == "ウロボロス鉱石" and not inherited.accepted, (
+        "the band's spacing no longer reproduces the failure this test is about")

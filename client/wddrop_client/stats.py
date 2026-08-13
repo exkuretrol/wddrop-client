@@ -110,8 +110,15 @@ def _add(acc: dict, event: dict) -> None:
     for line in contents:
         acc["lines"] += 1
         name = line.get("item_name") or line.get("equipment_name") or "?"
-        row = acc["by_item"].setdefault(
-            name, {"item": name, "openings": 0, "quantity": 0, "inferred": 0})
+        # Grouped by ID where there is one. The same drop reads as a different NAME in each
+        # language, so grouping by name would file one item as two the moment a player
+        # switches — which this client asks them to do. Falling back to the name keeps a
+        # reading that resolved to nothing countable rather than dropped.
+        key = (line.get("item_id") or line.get("equipment_identification") or name)
+        row = acc["by_item"].setdefault(key, {
+            "item": name, "item_id": line.get("item_id"),
+            "equipment_identification": line.get("equipment_identification"),
+            "openings": 0, "quantity": 0, "inferred": 0})
         row["openings"] += 1
         row["quantity"] += int(line.get("quantity") or 0)
         row["inferred"] += bool(line.get("qty_unknown") or line.get("quantity_unknown"))

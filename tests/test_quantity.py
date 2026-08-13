@@ -211,3 +211,38 @@ def test_the_separator_floor_sits_between_present_and_absent(game):
     than left as a tuned constant: 0.60 sits between a real 「×」 (0.92-0.96 for the game's
     font, 0.81-0.85 for PMingLiU) and the tail of a glyph mistaken for one (0.37-0.48)."""
     assert 0.50 < SEPARATOR_MIN_SCORE < 0.80
+
+
+def test_a_wrapped_line_still_gives_up_its_number(game, canvas):
+    """The game WRAPS a long message rather than clipping it, so on a wrapped line only the
+    first character or two of the trailing words are on this row — 「…×3を」, with the rest
+    below the band. The whole tail then matches nothing (measured on a real chest: 0.27),
+    the digits lose their right-hand bound, and the fallback takes the 「を」 as part of the
+    number and gives up. Its first character alone scored 0.82 in the same place.
+
+    Measured on that chest: `x1?` before, ×3 after — and `x1?` is not a small error. It
+    enters the study as a quantity that was not read.
+    """
+    import numpy as np
+
+    line = line_with_wrap = None
+    text = f"{PREFIX}{NAME}{SEP}3{SUFFIX}"
+    line = game.render(text)
+    # Cut where the row ends, keeping the separator, the digit and one character of tail.
+    from wddrop_client.capture.glyph import ink_bbox
+
+    tail_start = ink_bbox(game.render(f"{PREFIX}{NAME}{SEP}3"))[2]
+    line_with_wrap = line.copy()
+    line_with_wrap[:, tail_start + int(game.size * 1.2):] = 0.0
+
+    assert read(line_with_wrap, game)[0] == 3, "the number was on the row and was not read"
+
+
+def test_the_whole_tail_is_still_preferred(game):
+    """The prefixes are a fallback, not a replacement: a complete line must still be bounded
+    by the whole tail, which is the strongest anchor there is."""
+    from wddrop_client.capture.glyph import _tail_prefixes
+
+    assert next(iter(_tail_prefixes(SUFFIX))) == SUFFIX
+    assert list(_tail_prefixes("！！")) == ["！！", "！"]
+    assert read(line(game, quantity=47), game)[0] == 47

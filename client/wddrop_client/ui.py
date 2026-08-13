@@ -47,11 +47,25 @@ from uuid import uuid4
 
 from . import theme
 from .config import (AUTOMATIC_MODES, CLIENT_VERSION, SEND_BATCH, SEND_EACH, SEND_MANUAL,
-                     ClientConfig, config_dir,
-                     data_dir, program_dir, records_path, spool_path)
+                     ClientConfig, config_dir, data_dir, in_development, program_dir,
+                     records_path, spool_path)
 from .i18n import LOCALES, NATIVE_NAMES, Translator, system_locale
 
 log = logging.getLogger("wddrop.ui")
+
+# The name a player sees, in the title bar and beside the navigation. Keyed by the English
+# form and translated like everything else, because the GAME's own name differs per language
+# and a tool named after it has to follow — 「辟邪除妖」 and 「ウィザードリィ ヴァリアンツ ダフネ」
+# are the same game, and neither player would recognise the other's title.
+#
+# 「寶箱」 rather than "drops": it is the game's own word for the thing being counted, used in
+# its own text (「打開50次寶箱」), and the client already calls a chest that everywhere else.
+APP_NAME = "Wizardry Variants Daphne chest log"
+
+# How wide a control on the settings page is allowed to get. Wide enough for the longest
+# menu entry any of the six languages puts in one — 「每 10 筆記錄傳送一次」 and
+# "Send each record as it happens" — and no wider.
+SETTING_WIDTH = 340
 
 # Sampling. A message dismissed between two samples is never captured and no later fix can
 # recover it, so the floor is a warning the player sees rather than a silent default.
@@ -219,14 +233,23 @@ class FitWorker(QtCore.QThread):
         try:
             from PIL import Image
 
-            from .__main__ import _font_candidates, _load_vocab, _prefix_from
+            from .__main__ import (
+                _band_font_candidates, _load_vocab, _prefix_from, _separator_from,
+                _suffix_from,
+            )
             from .calibration import ProfileStore, fit_hud, fit_message_profile
 
-            vocab, fmt, _ = _load_vocab(self.args)
+            vocab, fmt, raw = _load_vocab(self.args)
+            # SUFFIX AND SEPARATOR, which the CLI has always passed and this had not. Without
+            # them the fit is made against a line half of which no candidate can cover, and
+            # the second pass — the one that fits the NAME's own pixels — never runs at all.
+            # Measured on a real Japanese shot: pass one alone chose 24px/+1.6 and scored
+            # 0.509, which then failed the profile's own self-check and refused to save.
             profile = fit_message_profile(
                 Image.open(self.drop), self.name, _prefix_from(fmt),
-                _font_candidates(self.args), [e.name for e in vocab.entries],
+                _band_font_candidates(self.args), [e.name for e in vocab.entries],
                 locale=self.args.locale,
+                suffix=_suffix_from(fmt), separator=_separator_from(raw),
             )
             if self.walk:
                 profile = fit_hud(profile, Image.open(self.walk),
@@ -271,14 +294,20 @@ class ReadWorker(QtCore.QThread):
         try:
             from PIL import Image
 
-            from .__main__ import _font_candidates, _load_vocab, _prefix_from
+            from .__main__ import (
+                _band_font_candidates, _load_vocab, _prefix_from, _suffix_from,
+            )
             from .calibration import propose_item_name
 
             vocab, fmt, _ = _load_vocab(self.args)
             names = [e.name for e in vocab.entries]
             self.vocabulary.emit(names)
+            # BOTH ends of the template. Which one carries the invariant text depends on the
+            # locale, and passing only the prefix is why this never filled the box in for a
+            # Japanese player — see propose_item_name.
             guess = propose_item_name(
-                Image.open(self.drop), _prefix_from(fmt), _font_candidates(self.args), names)
+                Image.open(self.drop), _prefix_from(fmt),
+                _band_font_candidates(self.args), names, suffix=_suffix_from(fmt))
         except Exception:                              # noqa: BLE001
             # Filling the box in is a convenience. Failing to do it must cost nothing but
             # the typing it would have saved.
@@ -396,6 +425,14 @@ class CalibrateDialog(QtWidgets.QDialog):
         self.resize(520, 300)
         self.walk: Path | None = None
         self.drop: Path | None = None
+        # WHICH STEP WE ARE ON, held outright rather than inferred from the two paths above.
+        # Inferring it cannot express the third state: the walk shot was SKIPPED, which is an
+        # offered choice and leaves `walk` empty exactly as never having taken it does. So
+        # skipping advanced the wording to step 2 and nothing else — the next capture was
+        # taken as the walk shot again, saved over walk.png, and the dialog looped there
+        # forever with its button still reading Capture.
+        self._walk_done = False
+        self._working = False
         self.result: dict | None = None
         self._worker = None
 
@@ -437,9 +474,29 @@ class CalibrateDialog(QtWidgets.QDialog):
         theme.apply_titlebar(self)
 
     # -- steps --------------------------------------------------------------------
+    def _busy(self, working: bool) -> None:
+        """Hold the dialog still while a thread is using it.
+
+        The close button too: Qt will happily delete the widget a worker is about to signal,
+        and the crash that follows arrives after the dialog is gone, where nothing connects
+        it to the calibration the player was in the middle of.
+        """
+        for widget in (self.action, self.skip):
+            widget.setEnabled(not working)
+        self._working = working
+
+    def closeEvent(self, event) -> None:                # noqa: D102 (Qt override)
+        if getattr(self, "_working", False):
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+    def _shot_target(self) -> str:
+        """Which shot the next Capture takes. Named so the step machine can be tested."""
+        return str(Path(self.args.data) / ("walk.png" if not self._walk_done else "drop.png"))
+
     def _capture(self) -> None:
-        target = "walk.png" if self.walk is None and self.drop is None else "drop.png"
-        path = Path(self.args.data) / target
+        path = Path(self._shot_target())
         self.action.setEnabled(False)
         self.skip.setEnabled(False)
         self._worker = ShotWorker(self.args.delay, path, self)
@@ -450,12 +507,13 @@ class CalibrateDialog(QtWidgets.QDialog):
         self._worker.start()
 
     def _skip(self) -> None:
-        if self.walk is None and self.drop is None:
+        if not self._walk_done:
             # Skipping the walk shot means no HUD template, and without one episodes never
             # close on the HUD returning — they fall back to the idle timeout, which does
             # not bracket chests. Say so plainly instead of failing later.
             self.status.setText(self.t(
                 "No HUD template will be made — chest bracketing will be poor."))
+            self._walk_done = True
             self._advance_to_drop()
         else:
             self.reject()
@@ -466,8 +524,9 @@ class CalibrateDialog(QtWidgets.QDialog):
         pix = QtGui.QPixmap(path)
         self.preview.setPixmap(pix.scaled(480, 160, QtCore.Qt.KeepAspectRatio,
                                           QtCore.Qt.SmoothTransformation))
-        if self.walk is None and self.drop is None:
+        if not self._walk_done:
             self.walk = Path(path)
+            self._walk_done = True
             self._advance_to_drop()
         else:
             self.drop = Path(path)
@@ -479,11 +538,19 @@ class CalibrateDialog(QtWidgets.QDialog):
             self.action.clicked.connect(self._fit)
             # Try to fill it in. The player still confirms — see propose_item_name.
             self.status.setText(self.t("reading the item name…"))
+            # LOCKED WHILE IT READS. The read takes tens of seconds, and everything it could
+            # be interrupted by leaves the dialog in a state it cannot recover: skipping
+            # starts a second shot while the first is still being read, closing tears the
+            # window out from under a running thread, and fitting would run against a name
+            # the box has not been filled in with yet.
+            self._busy(True)
             self._reader = ReadWorker(self.args, self.drop, self)
             self._reader.vocabulary.connect(self._offer_names)
             self._reader.read.connect(self._proposed)
             self._reader.blank.connect(
                 lambda: self.status.setText(self.t("Could not read it — please type it.")))
+            self._reader.read.connect(lambda *_: self._busy(False))
+            self._reader.blank.connect(lambda: self._busy(False))
             self._reader.start()
 
     def _offer_names(self, names: list) -> None:
@@ -518,7 +585,7 @@ class CalibrateDialog(QtWidgets.QDialog):
 
     def _advance_to_drop(self) -> None:
         self.step.setText(self.t(
-            "Step 2 of 2 — open a chest and leave the 「獲得了…」 message on screen, then "
+            "Step 2 of 2 — open a chest and leave the 「…を手に入れた!!」 message on screen, then "
             "press Capture."))
 
     def _fit(self) -> None:
@@ -582,6 +649,56 @@ class UploadWorker(QtCore.QThread):
         self.done.emit(result)
 
 
+class RoomyRows(QtWidgets.QStyledItemDelegate):
+    """Gives a dropdown's rows the height they had before the style changed.
+
+    Squaring the popups meant drawing the whole window with a plain style, and a plain style
+    sizes list rows its own way: measured on the same dungeon picker, rows went from 43px to
+    25px — square corners, and a list too tight to pick from comfortably.
+
+    The style sheet cannot fix it. `::item { padding }` and `min-height` are both ignored
+    here — measured across five combinations, every one of them still produced a 25px row —
+    because the row height comes from the delegate's size hint, which is where this is.
+
+    Derived from the FONT rather than fixed at 43, so it survives a player whose display
+    scales differently or whose fonts are larger than this machine's.
+    """
+
+    # Chosen against the old build: 17px of font plus this is the 43px rows had before.
+    PAD = 26
+    # A rule and the air either side of it. Left at the style's own row height it was a 32px
+    # hole between two dungeons, which reads as the list having lost an entry.
+    SEPARATOR_HEIGHT = 11
+
+    @staticmethod
+    def _is_separator(index) -> bool:
+        return index.data(QtCore.Qt.AccessibleDescriptionRole) == "separator"
+
+    def sizeHint(self, option, index):                 # noqa: N802 (Qt)
+        size = super().sizeHint(option, index)
+        if self._is_separator(index):
+            size.setHeight(self.SEPARATOR_HEIGHT)
+            return size
+        size.setHeight(option.fontMetrics.height() + self.PAD)
+        return size
+
+    def paint(self, painter, option, index) -> None:   # noqa: N802 (Qt)
+        """Draw the rule, because the style sheet cannot.
+
+        `QComboBox QAbstractItemView::separator` is honoured for a menu and ignored here —
+        the popup is a list view, and its separators are items the delegate paints. Set in
+        the sheet it produced a gap and no line, which is the same as no separator at all.
+        """
+        if not self._is_separator(index):
+            super().paint(painter, option, index)
+            return
+        painter.save()
+        painter.setPen(QtGui.QColor(theme.RULE))
+        middle = option.rect.center().y()
+        painter.drawLine(option.rect.left() + 10, middle, option.rect.right() - 10, middle)
+        painter.restore()
+
+
 class Combo(QtWidgets.QComboBox):
     """A combobox that squares its own dropdown, and does not build it before it is needed.
 
@@ -597,12 +714,29 @@ class Combo(QtWidgets.QComboBox):
     """
 
     def showPopup(self) -> None:                       # noqa: N802 (Qt)
-        # BEFORE and after. Windows decides a window's corners as it is shown, so setting the
-        # attribute only afterwards can leave the first showing of a given popup rounded —
-        # and a list that is rebuilt gets a new window, which makes every showing the first
-        # one. `winId()` forces the native handle to exist so the attribute has something to
-        # apply to; without it there is nothing there yet to square.
-        popup = self.view().window()
+        """Open the list — square, roomy, and below the control.
+
+        Three things have to be true, and each is fixed somewhere different:
+
+          * SQUARE. Windows decides a window's corners as it is shown, so the attribute is
+            set BEFORE and after: a list that is rebuilt gets a new window, which makes
+            every showing the first one, and `winId()` forces the handle to exist so there
+            is something to set it on. What the STYLE paints inside is `theme.apply_style`.
+          * BELOW, and with no container chrome around it. Also the style — see
+            `theme.apply_style`, which answers one hint differently for exactly this.
+          * ROOMY. The plain style sizes rows at 32px where this window's own reads at 43,
+            so the height comes from a delegate. Attached here rather than at build time
+            because asking for the view CONSTRUCTS the popup container, and doing that for
+            every dropdown at startup builds lists nobody has asked to see.
+
+        Nothing caps the height any more: with the popup a list rather than a menu, Qt
+        honours `maxVisibleItems` again and arrives at ten rows on its own.
+        """
+        view = self.view()
+        if not getattr(self, "_roomy", False):
+            self._roomy = True
+            view.setItemDelegate(RoomyRows(view))
+        popup = view.window()
         popup.winId()
         theme.square_corners(popup)
         super().showPopup()
@@ -632,6 +766,57 @@ class ShareBar(QtWidgets.QStyledItemDelegate):
         painter.setBrush(QtGui.QColor(theme.INK))
         painter.drawRect(room.left(), top, max(1, int(room.width() * fraction)), height)
         painter.restore()
+
+
+class AtlasWorker(QtCore.QThread):
+    """Builds the glyph atlas off the GUI thread.
+
+    Five seconds on a real machine — short enough to be tempting to do inline, long enough
+    that the window would stop repainting while it happened, which reads as a hang on the
+    one screen a new player is looking at.
+    """
+
+    done = QtCore.Signal(str)                  # "" on success, otherwise what went wrong
+
+    def __init__(self, locale: str, parent=None):
+        super().__init__(parent)
+        self.locale = locale
+
+    def run(self) -> None:                     # noqa: D102 (QThread entry point)
+        try:
+            import json
+
+            from .atlas import build
+            from .config import config_dir
+            from . import gamefont
+            from .gamefont import game_fonts
+
+            vocab = find_data("vocab.{locale}.json", self.locale)
+            if vocab is None:
+                self.done.emit("no vocabulary")
+                return
+            fonts = game_fonts()
+            if not fonts:
+                self.done.emit("game not found")
+                return
+            words = json.loads(Path(vocab).read_text(encoding="utf-8"))
+            build(fonts[0], words, config_dir(), self.locale, fallbacks=fonts[1:])
+            # TWO atlases, because the game draws the two surfaces this client reads in two
+            # different faces: the mining panel in BaseFont, the drop message band in
+            # ScenarioFont. One atlas was built and used for both, so every chest line was
+            # matched against the wrong typeface — see __main__._band_source.
+            scenario = next((f for f in fonts if "ScenarioFont" in Path(f).name), None)
+            if scenario is not None:
+                build(scenario, words, config_dir(), self.locale,
+                      fallbacks=[f for f in fonts if f != scenario],
+                      stem=f"{self.locale}.scenario")
+            # The faces have served their purpose the moment the atlases exist. Kept only
+            # until here so a rebuild does not need the game running; see discard_cache.
+            gamefont.discard_cache()
+            self.done.emit("")
+        except Exception as exc:               # noqa: BLE001 — reported, never a crash
+            log.exception("wddrop: building the atlas failed")
+            self.done.emit(str(exc))
 
 
 class WheelGuard(QtCore.QObject):
@@ -723,6 +908,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self._swings_since_break = 0
         self._pickaxe_lives: list[int] = []
 
+        # SHORT, because of where it is shown. A taskbar button is a few characters wide and
+        # alt-tab is not much better, so the full name — 「辟邪除妖 Variants Daphne 寶箱紀錄工具」
+        # — arrives there as 「辟邪除…」, which identifies nothing. A short distinctive word
+        # survives the truncation. The full name is in the ribbon, where there is room for it.
+        # Belt and braces. `main()` sets it before anything exists, which is the right
+        # place — but a window also gets built by the frozen self-check and by the tests,
+        # and a dropdown that is square in one and round in the other is the kind of
+        # difference that makes a screenshot in a bug report untrustworthy.
+        theme.apply_style(QtWidgets.QApplication.instance())
         self.setWindowTitle(f"wddrop {CLIENT_VERSION}")
         self.resize(820, 700)
         # WDDROP_NO_STYLE=1 starts the window unstyled. It is here to settle one question in
@@ -772,8 +966,21 @@ class MainWindow(QtWidgets.QMainWindow):
         rl.setContentsMargins(20, 14, 20, 14)
         rl.setSpacing(3)
         top = QtWidgets.QHBoxLayout()
-        # No wordmark here. The title bar above already says what this is, and now that it
-        # is painted to match the ribbon the two sat one above the other saying it twice.
+        # The wordmark, BESIDE the navigation rather than stacked above it. There was none
+        # here for a while, on the grounds that the title bar says what this is — but the
+        # title bar said `wddrop 0.3.0`, which is the name of a folder, not of a thing a
+        # player recognises. Now the title bar carries the real name for the taskbar, and
+        # this carries it where the eye is; on one row, so it costs no height and cannot
+        # read as the same sentence printed twice.
+        wordmark = QtWidgets.QLabel(self.t(APP_NAME))
+        wordmark.setObjectName("wordmark")
+        top.addWidget(wordmark)
+        # Said plainly, and next to the name rather than buried in the guide: this leads with
+        # a game's title, and nobody should have to wonder whether it came from the people
+        # who made the game.
+        unofficial = QtWidgets.QLabel(self.t("unofficial"))
+        unofficial.setObjectName("meta")
+        top.addWidget(unofficial)
         top.addStretch(1)
         self.nav = {}
         for index, key in ((0, "Record"), (1, "Stats"), (2, "Guide"), (3, "Settings")):
@@ -883,7 +1090,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         theme.apply_item_highlight(self.table)
-        layout.addWidget(self.table, 1)
+
+        # THE TABLE AND ITS EMPTY STATE OCCUPY THE SAME SPACE, one shown at a time. An empty
+        # table is four fifths of this window saying nothing — and saying it in the shape of
+        # a ledger with ruled headings, which reads as "recording, and nothing found" rather
+        # than as "not recording yet". The two states are not the same claim and should not
+        # look alike.
+        self.empty = QtWidgets.QLabel("")
+        self.empty.setObjectName("empty")
+        self.empty.setAlignment(QtCore.Qt.AlignCenter)
+        self.empty.setWordWrap(True)
+        self.records = QtWidgets.QStackedWidget()
+        self.records.addWidget(self.empty)
+        self.records.addWidget(self.table)
+        layout.addWidget(self.records, 1)
 
         foot = QtWidgets.QFrame()
         foot.setObjectName("footer")
@@ -931,7 +1151,10 @@ class MainWindow(QtWidgets.QMainWindow):
         hl.setContentsMargins(20, 16, 20, 12)
         hl.setSpacing(4)
         self.stats_headline = QtWidgets.QLabel("")
-        self.stats_headline.setObjectName("state")
+        # The page's one loud thing. It was set at the same size as the caveats under it, so
+        # the count a player came to read and the note about timezone boundaries carried
+        # equal weight.
+        self.stats_headline.setObjectName("headline")
         hl.addWidget(self.stats_headline)
         self.stats_detail = QtWidgets.QLabel("")
         self.stats_detail.setObjectName("hint")
@@ -1025,6 +1248,49 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stats_day.setCurrentIndex(at if at >= 0 else 0)
         self.stats_day.blockSignals(False)
 
+    def _build_atlas(self) -> None:
+        """Make the glyph atlas from the game's own font, once.
+
+        Started from `_refresh_setup`, which runs whenever the page is shown — so the guard
+        matters: without it, a build already running would be started again on every refresh.
+
+        ONCE PER LOCALE PER SESSION, and that second guard is not belt-and-braces. A
+        successful build calls `_refresh_setup` again, which asks the same question that
+        started it; if the build could not produce everything asked for — the game shipping
+        only one face, so no scenario atlas is written — the answer is still "missing" and it
+        would rebuild forever, in a thread, silently. Trying once and living with what came
+        out is the behaviour that terminates.
+        """
+        if getattr(self, "_atlas_worker", None) is not None:
+            return
+        tried = getattr(self, "_atlas_tried", None)
+        if tried is None:
+            tried = self._atlas_tried = set()
+        if self.cfg.locale in tried:
+            return
+        tried.add(self.cfg.locale)
+        self._say(self.t("Reading the game's own font, so text can be recognised. This "
+                         "happens once."), "attention")
+        self._atlas_worker = AtlasWorker(self.cfg.locale, self)
+        self._atlas_worker.done.connect(self._atlas_built)
+        self._atlas_worker.start()
+
+    def _atlas_built(self, problem: str) -> None:
+        self._atlas_worker = None
+        if not problem:
+            self._say(self.t("Ready."))
+            self._refresh_setup()
+            return
+        if problem == "game not found":
+            # Not an error to shout about: a player may be on a machine that never had the
+            # game. Say what it needs and what to do, in one sentence.
+            self._say(self.t("The game was not found on this computer, so its font could "
+                             "not be read. Install it, or build the atlas yourself."),
+                      "attention")
+        else:
+            self._say(self.t("The glyph atlas could not be built: {why}", why=problem),
+                      "attention")
+
     def _place_names(self) -> dict:
         """id -> name, for dungeons and their floors.
 
@@ -1039,6 +1305,22 @@ class MainWindow(QtWidgets.QMainWindow):
                 names[floor["id"]] = floor["name"]
         return names
 
+    def _item_names(self):
+        """What to call an item in the language the WINDOW is in.
+
+        The game is in Japanese because this client asked it to be, so what was recorded is
+        Japanese. Showing that to someone who set the interface to Chinese answers in a
+        language they did not choose. Loaded once and kept: it is a few thousand strings and
+        the page redraws on every refresh.
+        """
+        if getattr(self, "_names_table", None) is None:
+            from .items import ItemNames
+
+            locale = self.t.locale if hasattr(self.t, "locale") else (self.cfg.ui_locale or "")
+            self._names_table = ItemNames.load(
+                find_data(ItemNames.FILENAME, locale or self.cfg.locale))
+        return self._names_table
+
     def _refresh_stats_page(self) -> None:
         from .stats import summarise
 
@@ -1049,9 +1331,18 @@ class MainWindow(QtWidgets.QMainWindow):
         names = self._place_names()
 
         overall = data["overall"]
-        self.stats_overall.setText(self.t(
-            "all time: {openings} openings · {lines} item lines · {days} days",
-            openings=overall["openings"], lines=overall["lines"], days=len(data["days"])))
+        # Only when it says something the headline does not. Looking at every day, this line
+        # repeated the tally above it word for word — 「2 次開啟 · 2 條道具」 twice, once
+        # under the other.
+        # Only what the headline does not already say. Looking at every day the two lines
+        # were the same tally printed twice, one under the other; what all-time adds THERE is
+        # how many days it took, which the headline has no room for.
+        showing_everything = self.stats_day.currentData() is None
+        self.stats_overall.setText(
+            self.t("{days} days recorded", days=len(data["days"])) if showing_everything
+            else self.t("all time: {openings} openings · {lines} item lines · {days} days",
+                        openings=overall["openings"], lines=overall["lines"],
+                        days=len(data["days"])))
 
         self.stats_headline.setText(
             f"{data['openings']} {self.t('openings')} · "
@@ -1096,7 +1387,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # not readable without the number they are shares OF.
         self.stats_table.setRowCount(len(rows) + (1 if rows else 0))
         for index, row in enumerate(rows):
-            cells = (row["item"], f"×{row['quantity']}", f"{row['share'] * 100:.1f}%", "")
+            shown = self._item_names().display(row)
+            cells = (shown, f"×{row['quantity']}", f"{row['share'] * 100:.1f}%", "")
             for column, value in enumerate(cells):
                 cell = QtWidgets.QTableWidgetItem(value)
                 if column:
@@ -1104,6 +1396,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 if column == 3:
                     cell.setData(QtCore.Qt.UserRole, float(row["of_top"]))
                     cell.setToolTip(self.t("{n} openings gave this", n=row["openings"]))
+                if column == 0 and shown != row["item"]:
+                    # What was actually on screen, kept within reach: the localised name is
+                    # a convenience, and the reading is the evidence.
+                    cell.setToolTip(row["item"])
                 self.stats_table.setItem(index, column, cell)
         if rows:
             total = QtWidgets.QTableWidgetItem(
@@ -1135,6 +1431,18 @@ class MainWindow(QtWidgets.QMainWindow):
         def row(label, widget, hint=None):
             box = QtWidgets.QVBoxLayout()
             box.setSpacing(3)
+            # A CONTROL is as wide as what it holds, not as wide as the window: stretched to
+            # the full 780px, 「日本語」 sat alone in a box wide enough for a paragraph, and the
+            # page read as a column of empty troughs.
+            #
+            # Only a control, though. Capping whatever a caller passes also caught the row
+            # that shows where a player's data lives — a folder path and a button, squeezed
+            # into 340px, so the path wrapped onto a second line. Which widgets want the
+            # narrow treatment is a property of what they ARE, not of who added them, so it
+            # is decided here rather than at each call.
+            if isinstance(widget, (QtWidgets.QComboBox, QtWidgets.QAbstractSpinBox,
+                                   QtWidgets.QLineEdit)):
+                widget.setMaximumWidth(SETTING_WIDTH)
             box.addWidget(widget)
             if hint:
                 note = QtWidgets.QLabel(hint)
@@ -1182,28 +1490,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ui_locale.currentIndexChanged.connect(self._ui_locale_changed)
         row(self.t("Interface language"), self.ui_locale)
 
-        self.locale = Combo()
-        for code in LOCALES:
-            self.locale.addItem(NATIVE_NAMES[code], code)
-        self.locale.setCurrentIndex(max(0, self.locale.findData(self.cfg.locale)))
-        self.locale.currentTextChanged.connect(self._locale_changed)
-        row(self.t("Game language"), self.locale,
-            self.t("The language the game itself is in. It decides which item names can be "
-                   "read."))
 
         self.data_label = QtWidgets.QLabel()
         self.data_label.setWordWrap(True)
         self.data_label.setObjectName("hint")
-        cal = QtWidgets.QHBoxLayout()
+        # The button is DEVELOPMENT ONLY. The client ships the fits it has been tested at and
+        # reads at those; a calibration made on a player's machine is a claim nobody has
+        # checked against a recording, and the one made here was fitted against the wrong
+        # typeface for three versions without anyone being able to tell. The label stays in
+        # every build, because which sizes are ready is worth knowing; the offer to make
+        # another one is for us. See config.in_development.
         self.cal_label = QtWidgets.QLabel()
         self.cal_label.setWordWrap(True)
-        cal.addWidget(self.cal_label, 1)
-        self.cal_button = QtWidgets.QPushButton(self.t("Calibrate…"))
-        self.cal_button.clicked.connect(self._calibrate)
-        cal.addWidget(self.cal_button)
-        holder = QtWidgets.QWidget()
-        holder.setLayout(cal)
-        form.addRow(self.t("Calibrate…").rstrip("…"), holder)
+        self.cal_button = None
+        if in_development():
+            cal = QtWidgets.QHBoxLayout()
+            cal.addWidget(self.cal_label, 1)
+            self.cal_button = QtWidgets.QPushButton(self.t("Calibrate…"))
+            self.cal_button.clicked.connect(self._calibrate)
+            cal.addWidget(self.cal_button)
+            holder = QtWidgets.QWidget()
+            holder.setLayout(cal)
+            form.addRow(self.t("Calibrate…").rstrip("…"), holder)
+        else:
+            form.addRow(self.t("Calibrate…").rstrip("…"), self.cal_label)
         form.addRow("", self.data_label)
 
         self.fps = QtWidgets.QDoubleSpinBox()
@@ -1233,8 +1543,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.record = QtWidgets.QCheckBox(self.t("Keep the frames"))
         self.record_all = QtWidgets.QCheckBox(self.t(
             "…including the walking frames (much bigger; for debugging a miss)"))
-        self.record_all.setEnabled(False)
+        # Restored, and saved on every change, like the rest of this page. Set BEFORE the
+        # signals are connected so restoring a state is not itself a change to be written.
+        self.record.setChecked(self.cfg.keep_frames)
+        self.record_all.setChecked(self.cfg.keep_all_frames)
+        self.record_all.setEnabled(self.cfg.keep_frames)
         self.record.toggled.connect(self.record_all.setEnabled)
+        self.record.toggled.connect(self._record_changed)
+        self.record_all.toggled.connect(self._record_changed)
         box = QtWidgets.QVBoxLayout()
         box.setSpacing(3)
         box.addWidget(self.record)
@@ -1246,7 +1562,26 @@ class MainWindow(QtWidgets.QMainWindow):
         holder.setLayout(box)
         form.addRow(self.t("Keep the frames"), holder)
 
-        self._no_wheel(self.send_mode, self.ui_locale, self.locale, self.fps)
+        # Beside "keep the frames" because it is the same kind of thing and answers the same
+        # question from the other side: the frames say what was on screen, the log says what
+        # this client made of it. A miss needs both, and neither can be turned on afterwards.
+        self.trace = QtWidgets.QCheckBox(self.t("Write a detailed log"))
+        self.trace.setChecked(self.cfg.trace)
+        self.trace.toggled.connect(self._trace_changed)
+        trace_box = QtWidgets.QVBoxLayout()
+        trace_box.setSpacing(3)
+        trace_box.addWidget(self.trace)
+        self.trace_note = QtWidgets.QLabel()
+        self.trace_note.setObjectName("hint")
+        self.trace_note.setWordWrap(True)
+        self.trace_note.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        trace_box.addWidget(self.trace_note)
+        holder = QtWidgets.QWidget()
+        holder.setLayout(trace_box)
+        form.addRow(self.t("Detailed log"), holder)
+        self._show_log_path()
+
+        self._no_wheel(self.send_mode, self.ui_locale, self.fps)
 
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1331,29 +1666,86 @@ class MainWindow(QtWidgets.QMainWindow):
     def _ui_locale_changed(self, _index: int) -> None:
         self.cfg.ui_locale = self.ui_locale.currentData()
         self.cfg.save()
-        self._say(self.t("Settings save as you change them."))
+        self._relaunch_in_the_new_language()
+
+    def _relaunch_in_the_new_language(self) -> None:
+        """Rebuild the window, because every string in it was translated on the way in.
+
+        `self.t` is bound once at construction and each label was given its text then, so
+        changing the language changed the SETTING and nothing a player could see — they had
+        to restart to find out it had worked. Qt's usual answer is a retranslate pass, which
+        means every widget growing a second place where its text lives; a window this size is
+        cheaper to build again than to keep in step.
+
+        NOT while recording. A capture owns a worker thread and a spool, and tearing its
+        window down mid-session to change a language is not a trade worth offering. The
+        setting is saved either way, so it applies the moment the session ends.
+        """
+        if self.worker is not None and self.worker.isRunning():
+            self._say(self.t("The language changes when this recording stops."), "attention")
+            return
+        fresh = MainWindow(self.cfg, data=self.data)
+        fresh.setGeometry(self.geometry())
+        fresh.show()
+        # Kept alive by the application, not by us: dropping the reference here would collect
+        # the new window along with the old one.
+        QtWidgets.QApplication.instance().setProperty("wddrop_window", fresh)
+        fresh._show_page(3)                            # stay on Settings, where they are
+        self.close()
 
     def _pickaxes_changed(self, value: int) -> None:
         self.cfg.pickaxes = int(value)
         self.cfg.save()
         self._refresh_pickaxes()
 
-    def _locale_changed(self, _text: str) -> None:
-        self.cfg.locale = self.locale.currentData() or self.cfg.locale
+    def _record_changed(self, _checked: bool) -> None:
+        self.cfg.keep_frames = self.record.isChecked()
+        self.cfg.keep_all_frames = self.record_all.isChecked()
         self.cfg.save()
-        self._refresh_setup()
+
+    def _trace_changed(self, checked: bool) -> None:
+        """Takes effect NOW, not at the next launch.
+
+        A player is asked to turn this on because something has just gone wrong, and they
+        will try to reproduce it in the same sitting. A setting that needs a restart to
+        begin recording detail would miss exactly that attempt.
+        """
+        from . import logs
+
+        self.cfg.trace = checked
+        self.cfg.save()
+        logs.configure(trace=checked)
+        self._show_log_path()
+
+    def _show_log_path(self) -> None:
+        from . import logs
+
+        self.trace_note.setText(self.t(
+            "Records what the client did while it read the screen, so a miss can be "
+            "explained afterwards. Written to {path}. Nothing is uploaded.",
+            path=str(logs.log_path())))
 
     def args_for(self, **extra) -> SimpleNamespace:
         """The same argument object the CLI builds, so both drive identical code."""
-        locale = self.locale.currentData() if hasattr(self, "locale") else self.cfg.locale
-        locale = locale or self.cfg.locale
+        locale = self.cfg.locale      # Japanese, fixed — see config.ClientConfig
         vocab = find_data("vocab.{locale}.json", locale)
         atlas = find_data("atlas.{locale}.json", locale)
+        # The message band is drawn in a different face from the mining panel, so it reads
+        # against a different atlas. Named outright rather than derived, because `fonts`
+        # here is already an override (the locale's atlas beats the profile's) and one
+        # override must not silently decide the other. See __main__._band_source.
+        scenario = find_data("atlas.{locale}.scenario.json", locale)
         base = dict(
             data=str(self.data), locale=locale,
             vocab=str(vocab) if vocab else f"vocab.{locale}.json",
             fonts=str(atlas) if atlas else None,
-            open_prompt="打開", record=None, record_mode="episodes", pickaxes=None,
+            band_fonts=str(scenario) if scenario else None,
+            # From the vocabulary, which carries it per locale ("開ける" in ja), not hardcoded
+            # here — this said "打開" while asking the player to run the game in Japanese, so
+            # it was searching every line for a string that could not appear. Harmless only
+            # because the prompt renders in the action-button area rather than the message
+            # band, so it is never seen there in ANY language (see episodes.py).
+            open_prompt=None, record=None, record_mode="episodes", pickaxes=None,
             dungeon=None, floor=None, fps=self.fps.value(), delay=4.0, source="window",
         )
         base.update(extra)
@@ -1364,16 +1756,45 @@ class MainWindow(QtWidgets.QMainWindow):
         found = {
             "vocabulary": find_data("vocab.{locale}.json", locale),
             "atlas": find_data("atlas.{locale}.json", locale),
-            "catalogue": find_data("catalog.{locale}.json", locale),
+            # In the WINDOW's language, not the game's. The other two are read against
+            # pixels and must match the language the game is drawing; a dungeon list is
+            # read by a person. Loading it with the rest put 「北穿の幽霊城」 in the picker
+            # and in the tallies of a client whose interface is Chinese — the ids are the
+            # same in every file, so only the words the player reads were wrong.
+            "catalogue": (find_data("catalog.{locale}.json", self.t.locale)
+                          or find_data("catalog.{locale}.json", locale)),
         }
         # The catalogue is OPTIONAL — the dungeon list is built in, and a file only overrides
         # it. The other two are not: without them nothing can be recognised at all.
         missing = [name for name, path in found.items()
                    if path is None and name != "catalogue"]
+        # The atlas is not shipped: it is the game's own typeface, and the client builds it
+        # here from the copy the player already has. Missing it is the ORDINARY state of a
+        # fresh install, so it is built rather than reported.
+        #
+        # The SCENARIO atlas counts as missing too. A player upgrading from a build that made
+        # only one atlas has a complete-looking install that is still reading every chest
+        # line against the mining panel's typeface — the exact defect this replaced. Falling
+        # back keeps them working, so this is a rebuild rather than a warning; but it has to
+        # actually happen, and nothing else would ever trigger it.
+        stale = found["atlas"] is not None and find_data(
+            "atlas.{locale}.scenario.json", locale) is None
+        if found["vocabulary"] is not None and (found["atlas"] is None or stale):
+            self._build_atlas()
+        # WHAT is loaded, not WHERE from. Three absolute paths in a monospace block was the
+        # build machine's folder layout printed into a player's settings page — it answered
+        # a question only a developer asks, and it answered it in the middle of the page. A
+        # player's question is "does it have what it needs", and the folder button below is
+        # already how they get to the files.
+        # Counted over what the client NEEDS, which is two files. The catalogue is not one
+        # of them any more — the dungeon list is built into the client, and a file only
+        # overrides it — so counting it made a complete install report "2 of 3" and look
+        # like something had gone missing.
+        needed = [name for name in found if name != "catalogue"]
         self.data_label.setText(
-            "\n".join(f"{name}: {path.name}  ({path.parent})"
-                      for name, path in found.items() if path)
-            + (f"\nmissing: {', '.join(missing)} — build them with tools/" if missing else ""))
+            self.t("{n} of {total} data files loaded",
+                   n=sum(1 for name in needed if found[name]), total=len(needed))
+            + (f" — {self.t('missing')}: {', '.join(missing)}" if missing else ""))
         self._load_catalog(found["catalogue"])
 
         from .calibration import ProfileStore
@@ -1383,7 +1804,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # start until they did — which is what a fresh install looked like: the fits were
         # inside the exe and only the command line ever consulted them.
         store = ProfileStore.load(self.data)
-        shipped = ProfileStore.shipped()
+        shipped = ProfileStore.shipped(self.cfg.locale)
         sizes = sorted(set(store.keys()) | set(shipped.keys()))
         if store.keys():
             self.cal_label.setText(self.t("calibrated for {sizes}",
@@ -1421,15 +1842,33 @@ class MainWindow(QtWidgets.QMainWindow):
         # only reads the screen — and an empty picker blocks recording entirely.
         from .dungeons import catalog as built_in
 
-        self._catalog = built_in()
+        # In the WINDOW's language, like the file it stands in for. The table carries a name
+        # per language for exactly this — a picker that lists 「北穿幽靈城」 to someone reading
+        # a Japanese interface is asking them to recognise a place by a word they have not
+        # seen in their game.
+        self._catalog = built_in(self.t.locale)
         if path is not None:
-            self._catalog = json.loads(path.read_text(encoding="utf-8")).get("dungeons",
-                                                                            self._catalog)
-        if True:
-            for d in self._catalog:
-                # The name only. The id is what the data is filed under, not something the
-                # player picking a dungeon has any use for.
-                self.dungeon.addItem(d["name"], d["id"])
+            # Tolerated, not trusted. The built-in list is what makes the picker work at all,
+            # and a catalogue that is missing, half-written or not JSON must not be able to
+            # empty it — an empty picker blocks recording entirely.
+            try:
+                self._catalog = json.loads(path.read_text(encoding="utf-8")).get(
+                    "dungeons", self._catalog)
+            except (OSError, ValueError) as exc:
+                log.warning("wddrop: ignoring the dungeon list at %s (%s)", path, exc)
+        # A rule between each group of dungeons, and NO heading over them. The leading digit
+        # of an id is the group — 7015 and 7001 are both 7 — and the game has no word for
+        # that grouping, so a label would be one we invented. A rule says "these belong
+        # together" without claiming to know what they are called.
+        previous = None
+        for d in self._catalog:
+            group = int(d["id"]) // 1000
+            if previous is not None and group != previous:
+                self.dungeon.insertSeparator(self.dungeon.count())
+            previous = group
+            # The name only. The id is what the data is filed under, not something the
+            # player picking a dungeon has any use for.
+            self.dungeon.addItem(d["name"], d["id"])
         # Restore last time's choice, if that dungeon is still in the catalogue. Done with
         # signals still blocked so it does not count as a fresh choice and re-save.
         if self.cfg.dungeon_id is not None:
@@ -1441,15 +1880,23 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _dungeon_changed(self) -> None:
         chosen = self.dungeon.currentData()
+        # The empty page tells the player what to do NEXT, and what that is has just
+        # changed: picking a dungeon turns "choose one" into "press start".
+        if self.table.rowCount() == 0:
+            self._show_empty()
         if chosen != self.cfg.dungeon_id:
             self.cfg.dungeon_id = chosen
             self.cfg.save()
         self.floor.clear()
         self.floor.addItem(self.t("not sure"), None)
-        index = self.dungeon.currentIndex() - 1
-        if 0 <= index < len(self._catalog):
-            for f in self._catalog[index].get("floors", []):
-                self.floor.addItem(f["name"], f["id"])
+        # BY ID, not by position. The picker's rows and the catalogue stopped lining up the
+        # moment separators went between the groups, and a positional lookup then reads the
+        # floors of whichever dungeon happens to sit that many rows down.
+        for entry in self._catalog:
+            if entry["id"] == chosen:
+                for f in entry.get("floors", []):
+                    self.floor.addItem(f["name"], f["id"])
+                break
         self._refresh_mining()
         self._refresh_start_enabled()
 
@@ -1552,6 +1999,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._hints = DungeonHints.load(args.vocab)
         self.table.setRowCount(0)
+        self._show_empty()
         self.chests = self.mined = 0
         self._started_at = datetime.now(timezone.utc)
         self._say(self.t("Preparing. This takes a few seconds."))
@@ -1574,10 +2022,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.timer.start()
 
     def _set_setup_enabled(self, enabled: bool) -> None:
-        for widget in (self.locale, self.dungeon, self.floor, self.fps, self.record,
-                       self.record_all, self.pickaxes, self.cal_button, self.upload,
-                       self.ui_locale, self.share, self.send_mode):
-            widget.setEnabled(enabled)
+        for widget in (self.dungeon, self.floor, self.fps, self.record,
+                       self.record_all, self.pickaxes, self.upload,
+                       self.ui_locale, self.share, self.send_mode, self.cal_button):
+            if widget is not None:                     # the calibrate button is dev-only
+                widget.setEnabled(enabled)
         if enabled:
             self._refresh_spool()
 
@@ -1587,8 +2036,26 @@ class MainWindow(QtWidgets.QMainWindow):
         seconds = int((datetime.now(timezone.utc) - self._started_at).total_seconds())
         return f"{seconds // 60}:{seconds % 60:02d}"
 
+    def _show_empty(self) -> None:
+        """What the page says before anything has been recorded.
+
+        Three states, three different sentences, because they call for three different
+        things from the player: choose a dungeon, press start, or go and open a chest. One
+        blank ledger for all three would leave them guessing which.
+        """
+        if self.worker is not None and self.worker.isRunning():
+            text = self.t("Recording. Open a chest or work a vein and it will appear here.")
+        elif self.dungeon.currentData() is None:
+            text = self.t("Choose the dungeon you are in, above.")
+        else:
+            text = self.t("Ready when you are — press {start}.",
+                          start=self.t("Start recording"))
+        self.empty.setText(text)
+        self.records.setCurrentWidget(self.empty)
+
     def _add_row(self, at: str, kind: str, what: str, marker: bool = False) -> int:
         row = self.table.rowCount()
+        self.records.setCurrentWidget(self.table)
         self.table.insertRow(row)
         when = QtWidgets.QTableWidgetItem(at)
         when.setForeground(QtGui.QColor(theme.MUTED))
@@ -1612,8 +2079,14 @@ class MainWindow(QtWidgets.QMainWindow):
         mining = event.get("provenance") == "mining"
         self.mined += mining
         self.chests += not mining
+        # Named in the language the WINDOW is in, not the one the GAME is in. The client asks
+        # for a Japanese game, so every reading is Japanese — and this line is what a player
+        # watches while they dive, so it was the one place the interface answered in a
+        # language they had not chosen. The stats page already went through the table; this
+        # printed `item_name` straight from the record.
+        names = self._item_names()
         items = " · ".join(
-            f"{c['item_name']} ×{c['quantity']}" + ("?" if c.get("qty_unknown") else "")
+            f"{names.display(c)} ×{c['quantity']}" + ("?" if c.get("qty_unknown") else "")
             for c in event.get("contents", []))
         qc = event.get("qc") or {}
         unread = qc.get("panel_lines_unread")
@@ -1711,9 +2184,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.counters.setText(
             f"{self._elapsed()}   {stats.get('frames', 0)} frames   "
             f"{self.chests} {self.t('chest')}   {self.mined} {self.t('vein')}")
-        if stats.get("frames", 0) > 200 and stats.get("hud_present", 0) == 0:
-            self._say(self.t("The minimap has not been seen. Stop and calibrate again."),
+        capped = stats.get("record_capped")
+        if capped and not getattr(self, "_said_capped", False):
+            self._said_capped = True
+            self._say(self.t("Kept {n} frames — that is the limit, so no more pictures are "
+                             "being saved. Drops are still being recorded.", n=f"{capped:,}"),
                       "attention")
+        # NO "the minimap has not been seen" warning. It fired after 200 frames without the
+        # HUD, which is an ordinary thing to spend: a player restocking in town, reading a
+        # menu, or sitting in a cutscene sees nothing else for far longer than ten seconds.
+        # And its advice was wrong — the calibration it told them to redo is one that shipped
+        # with the client and was tested against real recordings. The runner still logs the
+        # same observation for a bug report; it is not worth interrupting a dive for.
 
     def _finished(self, stats: dict) -> None:
         self.timer.stop()
@@ -1759,9 +2241,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.upload.setEnabled(False)
         self.uploader = UploadWorker(self.cfg, self)
         self.uploader.done.connect(lambda r: (
-            None if quiet else self._say(
-                self.t("Sent {sent}. {waiting} still waiting.",
-                       sent=r["uploaded"], waiting=r["remaining"])),
+            self._say_blocked(r["blocked"], r["remaining"]) if r.get("blocked") else (
+                None if quiet else self._say(
+                    self.t("Sent {sent}. {waiting} still waiting.",
+                           sent=r["uploaded"], waiting=r["remaining"]))),
             self._refresh_spool(), self._upload_deferred(quiet)))
         self.uploader.failed.connect(
             lambda m: (self._say(self.t("Could not send: {why}. It stays on this computer "
@@ -1769,6 +2252,24 @@ class MainWindow(QtWidgets.QMainWindow):
                        self._refresh_spool(),
                        setattr(self, "_upload_again", False)))
         self.uploader.start()
+
+    def _say_blocked(self, blocked: dict, waiting: int) -> None:
+        """The server will not take records from this build. Say so, and say what happens.
+
+        SAID EVEN WHEN THE UPLOAD WAS QUIET. Every other outcome here can be left unsaid
+        because it resolves itself — a failed send retries, a slow one finishes. This one
+        never does: the waiting count stops falling and stays stopped until the player does
+        something, and a number that does not move with no reason beside it was already
+        reported once as broken detection.
+
+        The two facts that matter are which version to get and that nothing was lost. A
+        player told only "rejected" has every reason to assume the second one is false.
+        """
+        latest = blocked.get("latest_version") or blocked.get("min_version") or ""
+        self._say(self.t(
+            "This version can no longer send records — update to {version}. Nothing was "
+            "lost: {waiting} record(s) are kept here and will send once you update.",
+            version=latest, waiting=waiting), "attention")
 
     def _upload_deferred(self, quiet: bool) -> None:
         """Run the request that arrived while the last upload was still in the air.
@@ -1819,7 +2320,20 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.worker is not None and self.worker.isRunning():
             self.worker.stop("app_closed")
             self.worker.wait(5000)
+        # The atlas build too. A thread still running while the interpreter tears down dies
+        # as "can't register atexit after shutdown" — a hard crash with no message, which is
+        # what a player closing the window during the first-run build would have seen.
+        atlas = getattr(self, "_atlas_worker", None)
+        if atlas is not None and atlas.isRunning():
+            atlas.wait(10000)
         event.accept()
+
+
+# Where a player can read about the window-sizing tool, written by whoever wrote it. Linked
+# rather than bundled and rather than described second-hand: it is someone else's work, it
+# resizes a window and touches nothing in the game, and a player deciding whether to run a
+# stranger's executable deserves the author's own page rather than our summary of it.
+WINDOW_TOOL_URL = "https://forum.gamer.com.tw/C.php?bsn=70180&snA=3240"
 
 
 def guide_html(t, data: Path) -> str:
@@ -1832,32 +2346,38 @@ def guide_html(t, data: Path) -> str:
     The bold lead of each rule is a separate string from its explanation, so a translator is
     never asked to reproduce markup inside a sentence.
     """
-    shots = data / "walk.png", data / "drop.png"
-    pictures = "".join(
-        f'<p><img src="{p.as_uri()}" width="420" /></p>' for p in shots if p.exists())
     return f"""
     <div style="color:{theme.INK}; font-size:14px; line-height:1.7;">
+      <h2 style="color:{theme.VELLUM};">{t('Set the game to Japanese')}</h2>
+      <p>{t('In the game: Options → Language → 日本語. It costs nothing and can be changed '
+            'back at any time.')}</p>
+      <p>{t('Your records show item names in the language of this window, whatever the '
+            'game is set to.')}</p>
+      <h2 style="color:{theme.VELLUM};">{t('Turn these two on')}</h2>
+      <p>{t('In the game, under Options:')}</p>
+      <ul>
+        <li><b>メッセージ早送り</b> — {t('message fast-forward')}</li>
+        <li><b>テキスト一括表示</b> — {t('show the whole text at once')}</li>
+      </ul>
+      <p>{t('With these on, a drop line appears complete instead of being drawn one '
+            'character at a time. That matters more than it sounds: this client reads '
+            'whatever is on screen, and a half-drawn line is a confident wrong answer '
+            'rather than a near miss — 191 item names truncate into a different valid '
+            'name.')}</p>
       <h2 style="color:{theme.VELLUM};">{t('Play in the tall window')}</h2>
-      <p><b>704 × 1241</b> — {t('this is the only size that reads reliably today, and the '
-            'client already has a calibration for it. You do not have to do anything.')}</p>
-      <p>{t('Other sizes, full screen included, are not recommended yet: they sample the '
-            'screen more slowly and some item names are still misread. The client will let '
-            'you calibrate and record at one, but expect gaps. More sizes are planned — if '
-            'you play at a different one, please say so, because a short recording is what '
-            'makes it fixable.')}</p>
-      <h2 style="color:{theme.VELLUM};">{t('Calibrate…').rstrip('…')}</h2>
-      <p>{t('Only needed at a size that is not listed above. The client takes both '
-            'screenshots itself. Press {calibrate} in {settings} and '
-            'it asks twice, counting down each time so you can switch back to the game:',
-            calibrate=f"<b>{t('Calibrate…')}</b>", settings=t('Settings'))}</p>
+      <p><b>704 × 1241</b> — {t('the size this client is set up for. Nothing to configure: '
+            'it already knows how to read that window.')}</p>
       <ol>
-        <li>{t('Stand in a dungeon with the minimap visible.')}</li>
-        <li>{t('Open a chest and leave the 「獲得了…」 message on screen, then type the '
-                'item name.')}</li>
+        <li>{t('In the game: Options → turn Fullscreen OFF, and close the panel to apply.')}</li>
+        <li>{t('Set the window to 704 × 1241 with {tool}. The game has no such option, and '
+               'that tool is the only way to get this shape — it is a small free utility by '
+               'NowvaB that resizes the game window and nothing else. It is not ours and '
+               'not bundled here.',
+               tool=f'<a href="{WINDOW_TOOL_URL}" style="color:{theme.VELLUM};">WVDWS</a>')}</li>
       </ol>
-      <p>{t('It refuses to save a profile that cannot read back the frame it was built '
-            'from, so if it accepts, it works.')}</p>
-      {pictures}
+      <p>{t('At any other size, including full screen, some item names are misread. If you '
+            'play at a different one, please say so — a short recording is what makes it '
+            'fixable.')}</p>
       <h2 style="color:{theme.VELLUM};">{t('While you play')}</h2>
       <ol>
         <li><b>{t('Pick the right dungeon.')}</b>
@@ -1872,8 +2392,11 @@ def guide_html(t, data: Path) -> str:
         <li><b>{t('Pickaxes are counted when one breaks.')}</b>
         {t('The client reads the break message itself, so the number beside the pickaxe '
            'follows what the game tells you. Set it when you restock.')}</li>
-        <li><b>{t('Stop between chests, not during one.')}</b></li>
       </ol>
+      <p>{t('You can use the computer while it records. The client reads the game window '
+            'itself, not a picture of the screen, so a browser or a chat window in front of '
+            'the game does not reach the recording. Minimising the game does: a window that '
+            'is not being drawn has nothing to read.')}</p>
       <p style="color:{theme.MUTED};">{t('If something records wrongly, turn on {frames} '
         'and do it again — a recording can be re-read after a fix.',
         frames=f"<b>{t('Keep the frames')}</b>")}</p>
@@ -1891,6 +2414,7 @@ def main(argv=None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     theme.install_message_filter()
     app = QtWidgets.QApplication(list(argv or []))
+    theme.apply_style(app)
     theme.apply_font(app)
     theme.apply_icon(app)
     window = MainWindow(ClientConfig.load())

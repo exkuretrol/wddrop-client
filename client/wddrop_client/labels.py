@@ -62,7 +62,11 @@ class DungeonHints:
         """
         vocab_path = Path(vocab_path)
         vocab = json.loads(vocab_path.read_text(encoding="utf-8"))
-        locale = vocab.get("locale", "zh_tw")
+        # Empty, not a guess: it only names the catalogue file to look for, and a vocabulary
+        # that does not say what language it is in cannot have one found for it. The miss
+        # falls through to the built-in dungeon list below, which is the documented outcome.
+        # It used to guess "zh_tw", which would have read a Chinese catalogue for any locale.
+        locale = vocab.get("locale", "")
         catalog_path = Path(catalog_path) if catalog_path else \
             vocab_path.parent / f"catalog.{locale}.json"
         if not catalog_path.exists():

@@ -174,3 +174,35 @@ def test_nothing_is_written_without_a_dive_or_a_reason(tmp_path):
     assert record_stop_reason(None, "user_stop", spool) == 0
     assert record_stop_reason("d", None, spool) == 0
     assert spool.read_text(encoding="utf-8") == before
+
+
+def test_reaching_the_frame_cap_is_reported_not_just_logged(tmp_path):
+    """A player who ticked "keep the frames" is relying on them. At 20fps in "all" mode the
+    cap is about three minutes — and one real session ran nearly five, so its last ninety
+    seconds were never saved. The player kept playing, believing otherwise, and the frames
+    that would have explained a missed drop did not exist.
+
+    The DROPS keep being recorded either way. Only the pictures stop, and that is what the
+    window has to be able to say.
+    """
+    from PIL import Image
+
+    from wddrop_client.runner import CaptureRunner
+
+    runner = CaptureRunner.__new__(CaptureRunner)
+    runner.record_dir = tmp_path
+    runner._recorded = 0
+    runner.record_limit = 2
+    runner._episode_index = 1
+    runner._episode_frame = 0
+    runner.stats = {}
+    runner._writer = None
+
+    frame = Image.new("RGB", (32, 24))
+    runner._write(frame)
+    assert "record_capped" not in runner.stats, "reported before the cap was reached"
+    runner._write(frame)
+    runner._stop_writer()
+
+    assert runner.stats["record_capped"] == 2
+    assert len(list(tmp_path.rglob("*.png"))) == 2, "the cap is a stop, not a warning"

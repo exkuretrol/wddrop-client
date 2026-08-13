@@ -14,9 +14,9 @@ WHAT ENDS UP INSIDE
 -------------------
     wddrop_client, wddrop_schema     the two packages, which are path imports rather than
                                      installed distributions
-    vocab.<locale>.json              the item names the reader matches against
-    catalog.<locale>.json            the dungeon and floor names the picker shows
-    atlas.zh_tw.json + .png          the rendered glyphs — SEE THE LICENCE NOTE
+    vocab.ja.json                    the item names the reader matches against
+    catalog.ja.json                  the dungeon and floor names the picker shows
+    atlas.ja.json + .png             the rendered glyphs — SEE THE LICENCE NOTE
     profiles.shipped.json            the calibrations that were verified against recordings
 
 NOT boosts.json. The client has never read it — it is the server's, and it was bundled here
@@ -40,19 +40,60 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+# What client/pyproject.toml declares. Kept in step by test_build.py rather than parsed here,
+# so this script has no dependency on a toml reader.
+PYTHON_FLOOR = (3, 11)
+# Checked differently from the rest: the client reaches this one through a shim (see
+# capture/wgc.py) that satisfies the OpenCV import the package makes at module scope and this
+# build excludes. A plain `import` of it inside the exe fails where the client succeeds.
+WINDOW_CAPTURE = "windows_capture.windows_capture"
 
 # Everything the client looks for beside itself at runtime, and what it costs to omit each.
 DATA = [
     ("DISCLAIMER.md", "the terms the player agrees to — the FIRST thing the window shows", True),
     ("profiles.shipped.json", "the verified calibrations — without it every player calibrates", True),
-    ("vocab.zh_tw.json", "the item names — without it nothing can be recognised at all", True),
+    ("vocab.ja.json", "the item names — without it nothing can be recognised at all", True),
     # OPTIONAL, and listed so the build says so: the dungeon list is built into the client
     # (wddrop_client/dungeons.py) and a file only overrides it.
-    ("catalog.zh_tw.json", "a fuller dungeon list than the one built in", False),
-    ("atlas.zh_tw.json", "the glyph atlas index", True),
-    ("atlas.zh_tw.png", "the glyph atlas sheet", True),
+    ("catalog.ja.json", "a fuller dungeon list than the one built in", False),
+    # Optional: without it the page shows the names as they were read, which is never
+    # wrong, only in the language the game is in.
+    ("names.ja.json", "item names in the window's language", False),
+    ("names.zh_tw.json", "item names in the window's language", False),
+    ("names.zh_cn.json", "item names in the window's language", False),
+    ("names.en.json", "item names in the window's language", False),
+    ("names.ko.json", "item names in the window's language", False),
+    ("names.de.json", "item names in the window's language", False),
+    # NOT shipped. The atlas is the game's own typeface rendered, and the client builds it on
+    # the player's machine from the copy they already have — which is the whole reason no
+    # typeface is distributed. `--with-atlas` bundles one anyway for a build that must work
+    # without the game installed.
+    ("atlas.ja.json", "a prebuilt glyph atlas", False),
+    ("atlas.ja.png", "a prebuilt glyph atlas", False),
 ]
-ATLAS = {"atlas.zh_tw.json", "atlas.zh_tw.png"}
+ATLAS = {"atlas.ja.json", "atlas.ja.png"}
+
+# Everything the client imports at run time. PyInstaller can only bundle what is installed
+# in the environment the BUILD runs in, and a missing one is not a build error — the exe is
+# produced, and fails on the player's machine at the moment that import is reached, which is
+# never at startup. Measured: `--with requests` instead of `--with httpx` produced an exe
+# that opened, recorded, and then could not upload; `mss` is worse, since without it there
+# is nothing to read the screen with at all.
+#
+# Named as (import name, install name, what is lost). The install names build the command
+# this prints, so a person who hits this can copy the line rather than work it out.
+RUNTIME_IMPORTS = [
+    ("PySide6", "PySide6-Essentials", "the window itself"),
+    ("PIL", "pillow>=10", "every part of recognition — nothing can be read"),
+    ("numpy", "numpy", "every part of recognition — nothing can be read"),
+    ("mss", "mss>=9.0", "screen capture: there is no way to see the game"),
+    ("httpx", "httpx>=0.27", "uploading: records are kept but never sent"),
+    ("pydantic", "pydantic>=2.7", "the record format — nothing can be spooled"),
+    ("UnityPy", "UnityPy", "reading the game's own font: no atlas can be built"),
+    (WINDOW_CAPTURE, "windows-capture",
+     "reading the game WINDOW: capture falls back to the screen, and anything in front of "
+     "the game is read instead of it"),
+]
 
 
 def entry_script(target: Path) -> Path:
@@ -65,6 +106,7 @@ def entry_script(target: Path) -> Path:
     body = [
         '"""Entry point for the bundled client — see build_exe.py."""',
         "import multiprocessing",
+        "import os",
         "import sys",
         "",
         "import wddrop_client.ui as ui",
@@ -77,23 +119,57 @@ def entry_script(target: Path) -> Path:
         "    made it and arrives on a player's as 'nothing recognised'.",
         '    """',
         "    from wddrop_client.calibration import ProfileStore",
+        "    from wddrop_client.config import ClientConfig",
         "    from wddrop_client.config import bundled_dir, program_dir",
         "",
+        "    import functools",
+        "",
+        "    print = functools.partial(__builtins__['print'] if isinstance(__builtins__, dict)",
+        "                              else __builtins__.print, flush=True)",
         "    print('frozen     :', getattr(sys, 'frozen', False))",
         "    print('exe folder :', program_dir())",
         "    print('bundled at :', bundled_dir())",
         "    ok = True",
         "    for pattern, needed in (('vocab.{locale}.json', True),",
-        "                            ('atlas.{locale}.json', True),",
+        "                            # Built on the player's machine from the game's own",
+        "                            # font — absent here is the normal state.",
+        "                            ('atlas.{locale}.json', False),",
         "                            # Optional: the dungeon list is built into the client",
         "                            # and a file only overrides it.",
         "                            ('catalog.{locale}.json', False)):",
-        "        hit = ui.find_data(pattern, 'zh_tw')",
+        "        hit = ui.find_data(pattern, ClientConfig.load().locale)",
         "        ok = ok and (hit is not None or not needed)",
-        "        print('  %-24s %s' % (pattern, hit or ('built in' if not needed else None)))",
+        "        print('  %-24s %s' % (pattern, hit or ('built on first run'",
+        "                                                if not needed else None)))",
         "    shipped = ProfileStore.shipped()",
         "    print('  %-24s %s' % ('shipped profiles', shipped.keys()))",
         "    ok = ok and bool(shipped.keys())",
+        "    # Every third-party module the client reaches for, imported INSIDE the bundle.",
+        "    # The build checks its own environment; this checks what actually got packed,",
+        "    # which is the only one of the two a player experiences. Each of these is",
+        "    # imported inside a function somewhere, so none of them fails at startup —",
+        "    # `httpx` first surfaced as a missing module at the moment of uploading.",
+        f"    for module in {[m for m, _i, _w in RUNTIME_IMPORTS if m != WINDOW_CAPTURE]!r}:",
+        "        try:",
+        "            __import__(module)",
+        "            print('  %-24s %s' % (module, 'in the bundle'))",
+        "        except Exception as exc:",
+        "            ok = False",
+        "            print('  %-24s MISSING (%s)' % (module, exc))",
+        "    # Asked as the question that matters rather than as an import: the client reaches",
+        "    # this one through a shim that satisfies the OpenCV import the package makes and",
+        "    # this build deliberately leaves out. Importing it directly here would report a",
+        "    # failure the client does not have.",
+        "    from wddrop_client.capture import wgc",
+        "",
+        "    try:",
+        "        wgc._native()",
+        "        why = ''",
+        "    except Exception as exc:",
+        "        why = ' (%s: %s)' % (type(exc).__name__, exc)",
+        "    print('  %-24s %s%s' % ('window capture',",
+        "                            'ready' if not why else 'NO, falls back to the screen', why))",
+        "    ok = ok and not why",
         "    # And the GUI stack itself. A frozen Qt app that cannot find its platform",
         "    # plugin fails at the first window, not at import, so importing is not the test.",
         "    import os",
@@ -108,15 +184,35 @@ def entry_script(target: Path) -> Path:
         "        print('  %-24s %s' % ('window', window.windowTitle() or 'built'))",
         "        # The state a FRESH install lands in — the shipped calibration has to be",
         "        # enough to start, or the exe asks for a fit it already carries.",
+        "        # A FIRST RUN STARTS BUILDING THE ATLAS, so wait for it before asking",
+        "        # whether the client is ready — otherwise this reports the state of a",
+        "        # machine mid-setup, which is not the question. Waited for explicitly:",
+        "        # close() on a window that was never shown does not reliably deliver",
+        "        # closeEvent, and that is where the window itself waits.",
+        "        worker = getattr(window, '_atlas_worker', None)",
+        "        if worker is not None:",
+        "            print('  %-24s %s' % ('atlas', 'building from the game, waiting'))",
+        "            worker.wait(120000)",
+        "            window._refresh_setup()",
         "        print('  %-24s %s' % ('calibration', window.cal_label.text()))",
         "        print('  %-24s %s' % ('ready to record', window._ready))",
         "        ok = ok and bool(window._ready)",
+        "        window.close()",
+        "        app.quit()",
+        "        app.processEvents()",
         "        app.processEvents()",
         "    except Exception as exc:",
         "        ok = False",
         "        print('  %-24s %s: %s' % ('window', type(exc).__name__, exc))",
         "    print('OK' if ok else 'MISSING DATA')",
-        "    return 0 if ok else 1",
+        "    # Out THE HARD WAY, on purpose. Everything above has been printed and flushed;",
+        "    # what remains is Qt and the interpreter unwinding each other, which aborts with",
+        "    # 0xC0000409 and no message. That is a property of tearing a QApplication down",
+        "    # from a script, not of the client — but an exit code that says 'crashed' when",
+        "    # the checks passed is worse than useless to whoever reads it in CI.",
+        "    sys.stdout.flush()",
+        "    sys.stderr.flush()",
+        "    os._exit(0 if ok else 1)",
         "",
         "",
         "if __name__ == '__main__':",
@@ -134,22 +230,55 @@ def entry_script(target: Path) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--no-atlas", action="store_true",
-                    help="leave the rendered game font out of the exe (see the licence note)")
+    ap.add_argument("--with-atlas", action="store_true",
+                    help="bundle a prebuilt atlas, for a build that must work without the "
+                         "game installed (see the licence note)")
     ap.add_argument("--name", default="wddrop")
     ap.add_argument("--console", action="store_true", help="keep a console window for logs")
+    ap.add_argument("--production", action="store_true",
+                    help="leave out the parts that are still in development (calibration)")
     args = ap.parse_args(argv)
 
+    # The interpreter that gets bundled, checked BEFORE anything is built. `uv run` picks
+    # whatever it finds when nothing pins a version, and it found 3.9 here — below what the
+    # client declares. The consequence is not an error: modules using newer syntax are
+    # dropped from the bundle as `invalid module`, one line among hundreds of PyInstaller
+    # log, and the exe is finished-looking and dead. Measured: wddrop_client.ui, over one
+    # escaped apostrophe inside an f-string.
+    if sys.version_info < PYTHON_FLOOR:
+        print(f"[!] this is Python {'.'.join(map(str, sys.version_info[:3]))}, and the "
+              f"client declares >= {'.'.join(map(str, PYTHON_FLOOR))}.\n"
+              f"    Build with a matching one — `uv run --python "
+              f"{'.'.join(map(str, PYTHON_FLOOR))} ...` — or the modules that need it are "
+              f"silently left out of the exe.")
+        return 1
+
+    import importlib.util
+
+    absent = [(module, install, why) for module, install, why in RUNTIME_IMPORTS
+              if importlib.util.find_spec(module) is None]
+    if absent:
+        print("[!] not installed here, so PyInstaller cannot put them in the exe:")
+        for module, _install, why in absent:
+            print(f"    {module:<12} {why}")
+        print("\n    " + " ".join(
+            ["uv run", f"--python {'.'.join(map(str, PYTHON_FLOOR))}", "--with pyinstaller"]
+            # Quoted: `>=` is a redirection to every shell this is pasted into.
+            + [f'--with "{install}"' for _m, install, _w in RUNTIME_IMPORTS]
+            + ["build_exe.py"]))
+        return 1
+
     wanted = [(name, why, need) for name, why, need in DATA
-              if not (args.no_atlas and name in ATLAS) and ((HERE / name).exists() or need)]
+              if (args.with_atlas or name not in ATLAS) and ((HERE / name).exists() or need)]
     missing = [f"    {name:<24} {why}" for name, why, need in wanted
                if need and not (HERE / name).exists()]
     if missing:
         print("[!] these have to be built before the exe can be:\n" + "\n".join(missing))
         print("\n    tools/build_vocab.py, build_catalog.py, build_atlas.py make them.")
         return 1
-    if args.no_atlas:
-        print("[=] no atlas inside: the exe will need atlas.zh_tw.json/.png beside it.")
+    if not args.with_atlas:
+        print("[=] no typeface inside: the client reads the game's own on the player's "
+              "machine.")
 
     build = HERE / "build"
     build.mkdir(exist_ok=True)
@@ -170,6 +299,14 @@ def main(argv: list[str] | None = None) -> int:
         "--hidden-import", "wddrop_schema.models",
         "--collect-submodules", "wddrop_client",
         "--collect-submodules", "wddrop_schema",
+        # UnityPy reaches for submodules and data files at run time — without this it
+        # imports and then fails on the first real call with "No module named
+        # UnityPy.resources", which looks like a missing game rather than a broken build.
+        "--collect-all", "UnityPy",
+        # The compiled extension behind window capture. Named explicitly because nothing
+        # imports it at module scope — it is reached inside a function, and only on Windows.
+        "--hidden-import", "windows_capture.windows_capture",
+        "--collect-binaries", "windows_capture",
         # PySide6-Essentials still carries modules the client never touches; leaving them in
         # costs ~40MB of exe for nothing.
         "--exclude-module", "PySide6.QtWebEngineCore",
@@ -177,6 +314,12 @@ def main(argv: list[str] | None = None) -> int:
         "--exclude-module", "PySide6.Qt3DCore",
         "--exclude-module", "matplotlib",
         "--exclude-module", "tkinter",
+        # `windows_capture`'s convenience wrapper imports OpenCV at module scope to implement
+        # a save-an-image helper. 42 MB, for a function the client does not call — and it
+        # does not call it because it binds the native class the wrapper wraps. Excluded so
+        # the exe stays the size it was; if something ever imports the wrapper, the build
+        # will say so rather than quietly grow by two thirds.
+        "--exclude-module", "cv2",
     ]
     if not args.console:
         cmd.append("--windowed")
@@ -189,6 +332,14 @@ def main(argv: list[str] | None = None) -> int:
         cmd += ["--add-data", f"{HERE / name}{';' if _windows() else ':'}."]
     if icon.exists():
         cmd += ["--add-data", f"{icon}{';' if _windows() else ':'}wddrop_client"]
+    # The development marker, unless this is a production build. Its PRESENCE is what the
+    # client checks, so a production exe carries no way to switch the unfinished parts back
+    # on — see config.in_development.
+    if not args.production:
+        marker = HERE / "build" / "DEVELOPMENT"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("built without --production\n", encoding="utf-8")
+        cmd += ["--add-data", f"{marker}{';' if _windows() else ':'}."]
     cmd.append(str(entry))
 
     print("[+] " + " ".join(cmd))
@@ -201,7 +352,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[!] the build reported success but {exe.name} is not there")
         return 1
     print(f"[+] {exe}  ({exe.stat().st_size / 1_048_576:.0f} MB)")
-    if not args.no_atlas:
+    if args.with_atlas:
         print("[=] this exe contains the game's rendered font. Building it for yourself is "
               "the same as the files on your disk;\n    handing it to other people "
               "redistributes a derivative of a commercial typeface — see build_exe.py.")

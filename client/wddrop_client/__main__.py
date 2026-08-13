@@ -29,7 +29,7 @@ log = logging.getLogger("wddrop.cli")
 
 from wddrop_schema.models import CaptureMode
 
-from .config import ClientConfig, config_dir
+from .config import ClientConfig, config_dir, data_dir
 from .consent import ConsentRequired, disclaimer_hash, disclaimer_text
 from .uploader import upload_spool
 
@@ -81,6 +81,67 @@ def _render_source_override(args) -> str | None:
     raise SystemExit(
         f"[!] --fonts matched {len(matches)} files; name exactly one to render with:\n"
         + "\n".join(f"    {m}" for m in matches[:8]))
+
+
+def _band_font_candidates(args) -> list[str]:
+    """The faces to FIT the message band against, which are the ones it is drawn in.
+
+    Calibration used to sweep whatever `--fonts` named, and the GUI names the panel's atlas
+    there. Fitting the band against the panel's typeface produces a profile that scores
+    badly and then fails its own self-check — measured on a real shot, 0.79 against the
+    band's own face and 0.92 against the panel's, with the fit landing on a different size
+    and spacing entirely. See _band_source for which face is which.
+    """
+    named = getattr(args, "band_fonts", None)
+    return [str(named)] if named else _font_candidates(args)
+
+
+def _band_source(args, panel_font: str) -> str:
+    """The face the MESSAGE BAND is drawn in, which is not the one the mining panel uses.
+
+    The game picks a typeface per UI element: every text object carries a serialized font
+    name and `LocalizeFontManager.GetFont(language, name)` resolves it. The two surfaces this
+    client reads are on opposite sides of that choice — measured against real frames, each
+    face given its own best alignment:
+
+        message band  「…を手に入れた!!」   ScenarioFont 0.83-0.91   BaseFont 0.69-0.84
+        mining panel  「… を入手した」      BaseFont     0.59-0.76   ScenarioFont 0.51-0.64
+
+    The client built one atlas, from BaseFont, and used it for both. The panel was right by
+    accident; the band was reading every line against the wrong face. Worst line of five:
+    0.695 -> 0.834 against a 0.60 gate, and 「100バイン紙幣」 stopped being refused outright.
+
+    The calibration is unaffected — 25px at +1.1 spacing is the best fit for BOTH faces, so
+    this swaps the atlas and nothing else. See the vault: Reference/UI Font System.
+
+    Resolution order, and why:
+
+    1. `band_fonts` on the args — the GUI names both atlases outright, because it already
+       overrides `--fonts` to force the LOCALE's atlas over whatever locale the profile was
+       fitted in, and that override must not also decide the band's face.
+    2. `--fonts` alone pins BOTH, because comparing two renderers on one recording is exactly
+       what that flag is for and silently rendering the band with a different file would
+       break the one guarantee it makes.
+    3. Otherwise: the scenario atlas beside the profile's, when it has been built.
+
+    Falls back to the panel's face whenever the scenario atlas is missing, so a player who
+    has not rebuilt their atlas is no worse off than before this existed.
+    """
+    explicit = getattr(args, "band_fonts", None)
+    if explicit:
+        return str(explicit)
+    if _render_source_override(args):
+        return panel_font
+    return _scenario_beside(panel_font) or panel_font
+
+
+def _scenario_beside(atlas: str) -> str | None:
+    """The `.scenario` twin of an atlas path, if it is there."""
+    path = Path(atlas)
+    if path.suffix.lower() != ".json" or path.stem.endswith(".scenario"):
+        return None
+    twin = path.with_name(f"{path.stem}.scenario.json")
+    return str(twin) if twin.exists() else None
 
 
 # -- commands --------------------------------------------------------------------
@@ -235,8 +296,12 @@ def cmd_calibrate(cfg: ClientConfig, args) -> int:
         walk = _guided_shot(
             "STEP 1/2 — stand in a dungeon with the minimap visible top-right.",
             _walk_shot_problem, args.delay, walk_path)
+        # Quoted from the locale's OWN template rather than written out here: the wording
+        # this asked for was Chinese whatever language the client was reading in, which is
+        # the one instruction a player cannot follow by guessing.
+        example = _clean_template(fmt).replace("{0}", "…")
         drop = _guided_shot(
-            "STEP 2/2 — open a chest and leave a 「獲得了…」 message on screen.",
+            f"STEP 2/2 — open a chest and leave a 「{example}」 message on screen.",
             _drop_shot_problem, args.delay, drop_path)
         if drop is None:
             raise SystemExit("[!] no drop message captured; cannot calibrate.")
@@ -251,7 +316,8 @@ def cmd_calibrate(cfg: ClientConfig, args) -> int:
     shot = Image.open(args.drop_shot)
     print(f"[*] fitting from {args.drop_shot} ({shot.size[0]}x{shot.size[1]}), name={args.name!r}")
     profile = fit_message_profile(
-        shot, args.name, prefix, _font_candidates(args), names, locale=args.locale
+        shot, args.name, prefix, _font_candidates(args), names, locale=args.locale,
+        suffix=_suffix_from(fmt), separator=_separator_from(raw),
     )
     print(f"[+] band={profile.message_band} font={Path(profile.font_path).name} "
           f"size={profile.font_size}px offset={profile.offset} "
@@ -282,13 +348,35 @@ def cmd_calibrate(cfg: ClientConfig, args) -> int:
     return 0
 
 
-def _prefix_from(fmt) -> str:
-    """Template text before {0}: 獲得了 for zh_tw, empty for name-first locales."""
+def _clean_template(fmt) -> str:
     import re
 
     tpl = fmt.raw.get("drop_item") or "{0}"
-    clean = re.sub(r"<[^>]+>", "", re.sub(r"^Msg@", "", tpl))
-    return clean.split("{0}")[0]
+    return re.sub(r"<[^>]+>", "", re.sub(r"^Msg@", "", tpl))
+
+
+def _prefix_from(fmt) -> str:
+    """Template text before {0}: 獲得了 for zh_tw, empty for name-first locales."""
+    return _clean_template(fmt).split("{0}")[0]
+
+
+def _suffix_from(fmt) -> str:
+    """Template text after {0}: 「！！」 for zh_tw, 「を手に入れた!!」 for ja.
+
+    Not cosmetic — it is what the reader masks out and what the quantity reader anchors on,
+    and it is the whole difference between the two locales' geometry.
+    """
+    clean = _clean_template(fmt)
+    return clean.split("{0}")[1] if "{0}" in clean else ""
+
+
+def _separator_from(raw: dict) -> str:
+    """The 「×」 between a name and its quantity, as this locale's own template writes it."""
+    import re
+
+    tpl = (raw.get("templates") or {}).get("name_and_quantity") or "{0}×{1}"
+    parts = re.split(r"\{\d\}", tpl)
+    return parts[1] if len(parts) > 2 else "×"
 
 
 def _peek_size(spec: str):
@@ -369,13 +457,32 @@ def _select_profile(args, size=None):
 
     root = _data_path(args, PROFILE_NAME).parent
     store = ProfileStore.load(root)
-    shipped = ProfileStore.shipped()
+    # For the language THIS run reads in: a fit made for another one names an atlas that is
+    # not here, and would fail at the font rather than at the choice.
+    shipped = ProfileStore.shipped(getattr(args, "locale", None))
     if size is not None:
         # The player's own fit first: they calibrated against their machine, and a shipped
         # one is a stand-in for a step they have not had to take.
-        chosen = store.get(size) or shipped.get(size)
+        # THE SHIPPED FIT WINS where there is one. It is the one that has been checked
+        # against recordings; a fit made on a player's machine is a claim nobody has
+        # verified, and calibration is no longer offered to players precisely because of
+        # that. Their own fit is still used for a size the shipped set does not cover, which
+        # is the case it exists for.
+        #
+        # The old order — theirs first — meant a stale profile silently outranked a better
+        # one shipped later, with nothing to say so. Measured on the player this was written
+        # for: their 24px/+2.0 fit stayed in use after 25px/+1.1 shipped, and mining recorded
+        # NOTHING for two more sessions because the panel's spacing sweep is relative to the
+        # band's. Upgrading the client could not fix it; only deleting the file could.
+        mine, baked = store.get(size), shipped.get(size)
+        chosen = baked or mine
         if chosen is not None:
-            if store.get(size) is None:
+            if baked is not None and mine is not None:
+                log.info("wddrop: using the shipped calibration for %s, not the one fitted "
+                         "here (%dpx %+.1f vs %dpx %+.1f)", ProfileStore.key_for(size),
+                         baked.font_size, baked.letter_spacing,
+                         mine.font_size, mine.letter_spacing)
+            elif baked is not None:
                 log.info("wddrop: using the calibration shipped for %s",
                          ProfileStore.key_for(size))
             return chosen
@@ -434,6 +541,7 @@ def _build_runner(cfg: ClientConfig, args, size=None):
     from .capture.episodes import EpisodeTracker
     from .capture.glyph import RenderRecognizer, centred_shifts, make_renderer
     from .capture.hud import HudDetector
+    from .items import ItemIndex
     from .runner import CaptureRunner
 
     profile = _select_profile(args, size)
@@ -446,7 +554,10 @@ def _build_runner(cfg: ClientConfig, args, size=None):
     # silently ignored, so a replay meant to test one renderer quietly used the other.
     font = _render_source_override(args) or profile.resolve_font(
         near=_data_path(args, PROFILE_NAME).parent)
-    renderer = make_renderer(font, profile.font_size, tuple(profile.window),
+    # The band and the panel are drawn in DIFFERENT faces — see _band_source. `font` stays
+    # the panel's (and the profile's) source; the band gets its own.
+    band_font = _band_source(args, font)
+    renderer = make_renderer(band_font, profile.font_size, tuple(profile.window),
                              getattr(profile, "letter_spacing", 0.0))
     recognizer = RenderRecognizer(
         renderer, prefix, names, shifts=centred_shifts(profile.offset, 1),
@@ -487,6 +598,7 @@ def _build_runner(cfg: ClientConfig, args, size=None):
         record_mode=getattr(args, "record_mode", "episodes"),
         dungeon_hints=hints,
         pickaxe_watch=watch,
+        item_index=ItemIndex.from_vocab(raw),
         pickaxe_recognizer=pickaxe_recognizer,
         mining_names=names if mining_fmt else None,
         mining_render_source=font,
@@ -498,7 +610,15 @@ def _build_runner(cfg: ClientConfig, args, size=None):
         # `font` is the render source actually in use — the atlas, or a ttf. `--fonts` is
         # not consulted: it is required only by calibrate, and asking for it here made
         # replay and run exit outright.
-        data_version=data_version(args.vocab, font),
+        # THE VOCABULARY, not the atlas. The stamp exists so a panel fit made against one
+        # set of game data is not reused against another — but the atlas is built on the
+        # player's own machine from their own copy of the font, so its bytes differ from
+        # everyone else's while describing the same game. Including it meant a fit baked into
+        # profiles.shipped.json could never match on any machine but the one that made it:
+        # the geometry was carried, discarded on load, and searched for again every session.
+        # Measured — shipped stamp c64f60c4..., the same data on the player's machine
+        # 93733e8f... The vocabulary is the thing that actually says which game data this is.
+        data_version=data_version(args.vocab),
         profile_path=_data_path(args, PROFILE_NAME),
     )
     # Before capture starts, so the cost lands while the window still says "Preparing…"
@@ -923,6 +1043,85 @@ def cmd_ui(cfg: ClientConfig, args) -> int:
     return ui_main([])
 
 
+def cmd_atlas(cfg: ClientConfig, args) -> int:
+    """Render the atlas from a font on THIS machine.
+
+    The recogniser compares rendered candidates against the screen, so it needs the typeface
+    the game draws with — and that typeface is licensed, so the client does not carry it.
+    Building it here means nothing font-derived is ever distributed: the glyphs are made on
+    the machine that already has the font.
+
+    Which font is the player's choice, and it decides how well this works. The game's own
+    face reads everything; another face reads the names but misses some, and leaves more
+    quantities unread — see the report this prints, and `--verify` on a real frame.
+    """
+    from .atlas import build
+
+    vocab_path = _data_path(args, f"vocab.{cfg.locale}.json")
+    if not Path(vocab_path).exists():
+        raise SystemExit(f"[!] no vocabulary at {vocab_path}\n"
+                         f"    The atlas is built from the names it has to draw.")
+    font, fallbacks = _atlas_fonts(args)
+    # THE PLAYER'S folder, not the program's. `data_dir()` is where the atlases that SHIP
+    # live, and writing there is wrong for one built here: the program folder is read-only
+    # under Program Files, and inside a one-file exe it is a temporary directory that is
+    # deleted on exit. This one is theirs, made from their font, and rebuildable — which is
+    # exactly what their own folder is for. `find_data` searches it either way.
+    out = Path(args.out) if args.out else config_dir()
+    vocab = json.loads(Path(vocab_path).read_text(encoding="utf-8"))
+    result = build(Path(font), vocab, out, cfg.locale, fallbacks=fallbacks)
+    print(f"[+] {result['glyphs']} glyphs from {Path(font).name} -> {result['meta'].name}"
+          f" + {result['png'].name}  ({result['bytes'] / 1_048_576:.1f} MB)")
+    # The SECOND face. The mining panel and the drop message band are drawn in different
+    # typefaces (see _band_source), so one atlas cannot serve both — and the one this
+    # command has always built is the panel's.
+    scenario = next((p for p in [Path(font), *fallbacks]
+                     if "ScenarioFont" in p.name), None)
+    if scenario is not None and not getattr(args, "font", None):
+        rest = [p for p in [Path(font), *fallbacks] if p != scenario]
+        second = build(scenario, vocab, out, cfg.locale, fallbacks=rest,
+                       stem=f"{cfg.locale}.scenario")
+        print(f"[+] {second['glyphs']} glyphs from {scenario.name} -> {second['meta'].name}"
+              f" + {second['png'].name}  (the message band reads against this one)")
+    if result["fallbacks"]:
+        print(f"    {result['fallbacks']} character(s) came from a fallback font")
+    if result["unresolved"]:
+        # Named, not counted. A character no font could draw is a name that can never match,
+        # and knowing WHICH tells the player whether it matters to them.
+        shown = "".join(result["unresolved"][:20])
+        print(f"[!] {len(result['unresolved'])} character(s) no font here can draw: {shown}"
+              f"\n    Names containing them will not be recognised.")
+    return 0
+
+
+def _atlas_fonts(args) -> tuple[str, list[Path]]:
+    """The face to build from, and the ones to fall back to.
+
+    The game's own, by default, read out of the player's installation — that is the whole
+    point, and it is what makes the atlas match the screen. Anything given with `--font`
+    wins, because a player whose game is elsewhere, or who wants to try another face, should
+    not have to argue with a search.
+
+    Not finding the game is an ORDINARY outcome, not an error: a player may be replaying
+    someone else's frames on a machine that never had it installed.
+    """
+    fallbacks = [Path(f) for f in getattr(args, "fallback", [])]
+    if getattr(args, "font", None):
+        return args.font, fallbacks
+
+    from .gamefont import game_fonts
+
+    found = game_fonts(getattr(args, "game", None))
+    if not found:
+        raise SystemExit(
+            "[!] the game's fonts could not be read, and no --font was given.\n"
+            "    Point at the install with --game <folder>, or give any font with\n"
+            "    --font <path to a .ttf/.otf/.ttc> — the game's own face reads everything,\n"
+            "    another face reads most of it.")
+    print(f"[=] the game's own faces: {', '.join(p.name for p in found)}")
+    return str(found[0]), found[1:] + fallbacks
+
+
 def cmd_whoami(cfg: ClientConfig, args) -> int:
     print(f"install_id = {cfg.install_id}")
     print("提出此識別碼即可要求刪除你的所有資料。/ Quote this id to request erasure.")
@@ -931,9 +1130,14 @@ def cmd_whoami(cfg: ClientConfig, args) -> int:
 
 # -- entry point -----------------------------------------------------------------
 def main(argv=None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     ap = argparse.ArgumentParser(prog="wddrop")
     ap.add_argument("--data", help="state directory (default: per-user config dir)")
+    # Accepted BEFORE the subcommand and after it, because both are what people type. The
+    # per-subcommand copies use SUPPRESS so that not passing one there does not overwrite a
+    # `--trace` given ahead of it — argparse would otherwise fill in its own default and
+    # silently turn it back off.
+    ap.add_argument("--trace", action="store_true",
+                    help="write a detailed log (also a setting in the window)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("consent")
@@ -944,16 +1148,20 @@ def main(argv=None) -> int:
     sub.add_parser("accuracy")
     q = sub.add_parser("probe")
     q.add_argument("--source", default="window")
-    q.add_argument("--vocab", default="vocab.zh_tw.json")
-    q.add_argument("--locale", default="zh_tw")
+    q.add_argument("--vocab", default="vocab.ja.json")
+    q.add_argument("--locale", default="ja")
 
-    p = sub.add_parser("dungeons"); p.add_argument("--catalog", default="catalog.zh_tw.json")
+    # ja, like everything else the client reads: the build stopped shipping a Chinese
+    # catalogue with 0.5.0, so this default named a file that is no longer there.
+    p = sub.add_parser("dungeons"); p.add_argument("--catalog", default="catalog.ja.json")
     p.add_argument("--floors", action="store_true")
 
     for name in ("calibrate", "run", "replay", "verify"):
         q = sub.add_parser(name)
-        q.add_argument("--vocab", default="vocab.zh_tw.json")
-        q.add_argument("--locale", default="zh_tw")
+        # Japanese by default, as the window is and as the guide asks for: the game's own
+        # font is readable out of the player's install for that language and no other.
+        q.add_argument("--vocab", default="vocab.ja.json")
+        q.add_argument("--locale", default="ja")
         if name == "calibrate":
             q.add_argument("--drop-shot", help="screenshot showing a drop message "
                                                "(omit to capture it live, guided)")
@@ -977,7 +1185,11 @@ def main(argv=None) -> int:
             q.add_argument("--fps", type=float, default=None,
                            help=f"sampling rate (live default {LIVE_DEFAULT_FPS}); for "
                                 "replay/verify it defaults to the recording's own rate")
-            q.add_argument("--open-prompt", default="打開")
+            # Defaulted to None, not to a language. The vocabulary carries this string per
+            # locale and `_build_runner` prefers it; the flag is only an override. A Chinese
+            # default meant a Japanese session searched every line for a string that could
+            # not appear in it.
+            q.add_argument("--open-prompt", default=None)
             q.add_argument("--pickaxes", type=int, default=None, metavar="N",
                            help="how many pickaxes you are diving with. Counted down as you "
                                 "mine, so you know when to restock; never uploaded.")
@@ -1010,13 +1222,31 @@ def main(argv=None) -> int:
 
     sub.add_parser("upload")
 
+    a = sub.add_parser("atlas", help="build the glyph atlas from a font on this machine")
+    a.add_argument("--font", help="the .ttf/.otf/.ttc to render from")
+    a.add_argument("--fallback", action="append", default=[],
+                   help="another font to take characters the first one lacks from")
+    a.add_argument("--out", help="where to write it (default: your data folder)")
+    a.add_argument("--game", help="the game's folder, if it is not where Steam usually puts it")
+
+    for parser in sub.choices.values():
+        parser.add_argument("--trace", action="store_true", default=argparse.SUPPRESS,
+                            help="write a detailed log (also a setting in the window)")
+
     args = ap.parse_args(argv)
     cfg = ClientConfig.load()
+    # The flag turns it on for this run; the setting turns it on for every run. Neither can
+    # turn the other off — a player who ticked the box in the window and then ran from the
+    # command line meant it to stay on.
+    from . import logs
+
+    logs.configure(trace=getattr(args, "trace", False) or cfg.trace)
     handlers = {
         "consent": cmd_consent, "dungeons": cmd_dungeons, "calibrate": cmd_calibrate,
         "run": cmd_run, "replay": cmd_replay, "upload": cmd_upload, "whoami": cmd_whoami,
         "windows": cmd_windows, "probe": cmd_probe, "drops": cmd_drops,
         "verify": cmd_verify, "accuracy": cmd_accuracy, "ui": cmd_ui,
+        "atlas": cmd_atlas,
     }
     try:
         return handlers[args.cmd](cfg, args)

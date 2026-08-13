@@ -64,7 +64,12 @@ class Profile:
     # Left edge of the drop message, in pixels. Fixed by the game's layout, so it is measured
     # once here rather than re-derived per frame from whatever is lit in the band.
     text_x0: int | None = None
-    locale: str = "zh_tw"
+    # The game language this was fitted against. EMPTY means unknown, which is what a profile
+    # written before the field existed is — and unknown must not be a guess: `ProfileStore`
+    # treats "" as "usable for any language" and a named locale as a claim, so a wrong guess
+    # here silently hands one language's geometry to another. It used to default to "zh_tw",
+    # which made every unlabelled profile claim to be Chinese.
+    locale: str = ""
     hud_region: tuple[float, float, float, float] | None = None   # fractional
     hud_threshold: float | None = None
     # The template is EMBEDDED, not referenced. A path can be moved, cleaned up or lost while
@@ -208,8 +213,19 @@ class ProfileStore:
         return next(iter(self._profiles.values())) if len(self._profiles) == 1 else None
 
     @classmethod
-    def shipped(cls) -> "ProfileStore":
-        """The verified calibrations that came with the client, if any."""
+    def shipped(cls, locale: str | None = None) -> "ProfileStore":
+        """The verified calibrations that came with the client, for one game language.
+
+        A calibration is fitted against a LANGUAGE as well as a resolution: it names the atlas
+        it was rendered from, and it was scored on the words that language writes. Handing a
+        Japanese client a Chinese fit is not a near miss — it points at an atlas that player
+        has no reason to have built, and the font resolver stops the session dead.
+
+        So an entry may be tagged with the locale it is for, as `704x1241@zh_tw`, and only the
+        resolution part is the key. Untagged entries are kept for whichever locale they say
+        they were fitted in. Asking for none of them in particular gets all of them, which is
+        what the tests and the settings page want.
+        """
         from .config import bundled_dir, program_dir
 
         path = next((root / cls.SHIPPED for root in (program_dir(), bundled_dir())
@@ -217,7 +233,17 @@ class ProfileStore:
         if path is None:
             return cls()
         raw = json.loads(path.read_text(encoding="utf-8"))
-        return cls({key: Profile(**value) for key, value in raw.items()})
+        keep: dict[str, Profile] = {}
+        for key, value in raw.items():
+            size_key, _, tag = key.partition("@")
+            profile = Profile(**Profile._coerce(value))
+            if locale and (tag or profile.locale) not in ("", locale):
+                continue
+            # A tagged entry is the specific answer and beats an untagged one for the same
+            # resolution, whichever order the file happens to list them in.
+            if tag or size_key not in keep:
+                keep[size_key] = profile
+        return cls(keep)
 
     @classmethod
     def load(cls, directory: str | Path) -> "ProfileStore":
@@ -284,6 +310,7 @@ def propose_item_name(
     font_paths: list[str],
     vocabulary: list[str],
     *,
+    suffix: str = "",
     sizes: range = range(12, 60),
 ) -> tuple[str, float, float] | None:
     """Read the item out of the calibration shot, so the player can CONFIRM instead of type.
@@ -315,25 +342,49 @@ def propose_item_name(
     import numpy as np
 
     from .capture.glyph import (
-        RenderRecognizer, anchor_window, calibrate, centred_shifts,
-        ink_bbox, make_renderer, required_window,
+        PAD, RenderRecognizer, anchor_window, calibrate, calibrate_on_invariant,
+        centred_shifts, ink_bbox, make_renderer, mask_after_name, required_window,
     )
 
     gray = frame.convert("L")
     bands = find_text_bands(gray)
     if not bands:
         return None
+    # WHICHEVER END THE INVARIANT IS AT. A name-last locale puts it before the name
+    # (「獲得了…」) where it can be rendered at the origin; a name-first one puts it after
+    # (「…を手に入れた!!」) where its x depends on the name's width. Fitting the second case
+    # as if it were the first means fitting against the empty string, which is what Japanese
+    # was doing — and it made this return None for every Japanese shot ever taken, so the
+    # box was never filled in and the player had to find their item among 3,500 names in a
+    # script they may not be able to type.
+    # Both are handed the window's own size to render into. The observation is cut to hold a
+    # whole LINE now, not the fixed default, and `calibrate` correlates shape-for-shape — so
+    # a mismatch does not score badly, it raises, and the `except ValueError` below would
+    # swallow every candidate and report that nothing could be read.
+    stage_one = (
+        (lambda w: calibrate(w, "", prefix, font_paths, sizes, (w.shape[1], w.shape[0])))
+        if prefix.strip()
+        else (lambda w: calibrate_on_invariant(w, suffix, font_paths, sizes))
+    )
+    if not prefix.strip() and not suffix.strip():
+        return None
 
     best = None
     for band in bands:
-        window = anchor_window(gray, band)
+        # WIDE ENOUGH TO HOLD THE WHOLE LINE. The default window is 380px, which is ample for
+        # text that starts where the line starts and useless for text that ENDS it: a real
+        # Japanese drop line is ~480px of ink, so the invariant this has to fit against fell
+        # outside the window entirely and nothing could be matched.
+        lit = ink_bbox(np.asarray(gray, dtype=float)[band[0]:band[1], :])
+        if lit is None:
+            continue
+        window = anchor_window(
+            gray, band, (lit[2] - lit[0] + 2 * PAD, band[1] - band[0] + 2 * PAD))
         if window is None:
             continue
         try:
-            # An empty name renders the prefix by itself — the one part of the line that is
-            # the same whatever dropped.
-            font, size, offset, score, spacing = calibrate(window, "", prefix, font_paths,
-                                                           sizes)
+            # The one part of the line that is the same whatever dropped — see stage_one.
+            font, size, offset, score, spacing = stage_one(window)
         except ValueError:
             continue
         if best is None or score > best[3]:
@@ -345,13 +396,22 @@ def propose_item_name(
     box = ink_bbox(np.asarray(gray, dtype=float)[band[0]:band[1], :])
     text_x0 = int(box[0]) if box else None
     window = required_window(make_renderer(font, size, (1600, 80), spacing), prefix, vocabulary)
+    renderer = make_renderer(font, size, window, spacing)
     recognizer = RenderRecognizer(
-        make_renderer(font, size, window, spacing), prefix, vocabulary,
+        renderer, prefix, vocabulary,
         # Wider than the 1 recognition uses: that assumes a FITTED offset, and this one came
-        # from the prefix alone.
+        # from the invariant alone.
         shifts=centred_shifts(offset, 2),
     )
-    match = recognizer.recognize(anchor_window(gray, band, window, x0_fixed=text_x0))
+    observed = anchor_window(gray, band, window, x0_fixed=text_x0)
+    # MASK THE TAIL, for the same reason the runner does. A candidate only ever covers the
+    # NAME, so whatever the template puts after it is ink nothing can match — two characters
+    # in Chinese and seven in Japanese, on names that are often seven. Recognising the whole
+    # line instead is how the reader itself used to fail: the right name still ranked first,
+    # at 0.543, under a 0.60 gate.
+    if observed is not None and suffix.strip():
+        observed, _cut = mask_after_name(observed, renderer, suffix)
+    match = recognizer.recognize(observed)
     if not match.accepted or not match.name:
         return None
     log.info("wddrop: proposed %r (score %.3f, margin %.4f)",
@@ -366,20 +426,31 @@ def fit_message_profile(
     font_paths: list[str],
     vocabulary: list[str],
     *,
-    locale: str = "zh_tw",
+    # REQUIRED, not defaulted. A fit is a claim about one language's geometry — the game sets
+    # its font size and line spacing per language — so the caller has to say which one it
+    # measured. It used to default to "zh_tw", so forgetting to pass it mislabelled the
+    # result rather than failing.
+    locale: str,
     sizes: range = range(12, 60),
+    suffix: str = "",
+    separator: str = "×",
 ) -> Profile:
     """Fit band, font, size and offset from one screenshot plus the confirmed item name.
 
     Every candidate band is tried, because the frame may also contain other text (an AUTO
     button, a party strip); the band that actually fits the known line wins on score rather
     than on a positional guess.
+
+    `suffix` is the template's own wording after the item name — 「！！」 for zh_tw,
+    「を手に入れた!!」 for ja. It is not decoration: it decides how wide the window must be to
+    hold a whole line, and it is masked out of the fit exactly as it is masked out of every
+    later reading, so the size and spacing chosen here are the ones the runner will use.
     """
     import numpy as np
 
     from .capture.glyph import (
-        RenderRecognizer, anchor_window, calibrate, centred_shifts,
-        ink_bbox, make_renderer, required_window,
+        MAX_QUANTITY, RenderRecognizer, _text_left, anchor_window, calibrate, centred_shifts,
+        ink_bbox, make_renderer, mask_after_name, required_window,
     )
 
     def np_asarray(img):
@@ -401,15 +472,38 @@ def fit_message_profile(
             )
         except ValueError:
             continue
+        # Then again on the pixels the runner will actually match: the first pass has to
+        # include the tail because nothing yet knows how big it is, and the size it picks is
+        # the one that best fits a line half of which no candidate can cover. Measured on a
+        # Japanese frame: pass one chose 24px/+1.6 (0.449), pass two 25px/+1.1 (0.793) — and
+        # only the second reads the frame at all.
+        named, cut = mask_after_name(
+            window, make_renderer(font, size, window.shape[::-1], spacing), suffix, separator)
+        if cut is not None:
+            try:
+                font, size, offset, score, spacing = calibrate(
+                    named, confirmed_name, prefix, [font],
+                    range(max(sizes.start, size - 3), min(sizes.stop, size + 4)),
+                )
+            except ValueError:
+                pass
         if best is None or score > best[0]:
             best = (score, band, font, size, offset, spacing)
 
     if best is None:
         raise ValueError("could not fit any band to the confirmed name")
     score, band, font, size, offset, spacing = best
-    box = ink_bbox(np_asarray(gray)[band[0]:band[1], :])
-    text_x0 = int(box[0]) if box else None
-    window = required_window(make_renderer(font, size, (1600, 80), spacing), prefix, vocabulary)
+    strip = np_asarray(gray)[band[0]:band[1], :]
+    box = ink_bbox(strip)
+    # The same left edge `anchor_window` derives when it is not given one, or the profile
+    # would pin every later reading to a different origin than the fit was made at.
+    text_x0 = _text_left(strip, int(box[0])) if box else None
+    # Sized for the WHOLE line, tail and all: the quantity reader anchors on the template's
+    # own wording, and a window that stops short of it reports every long name as
+    # `qty_unknown` without ever raising. `ja` needs ~120px more than `zh_tw` for this.
+    window = required_window(
+        make_renderer(font, size, (1600, 80), spacing), prefix, vocabulary,
+        tail_sample=f"{separator}{MAX_QUANTITY}{suffix}" if suffix else None)
     log.info("wddrop: window sized to %s for %d candidates", window, len(vocabulary))
 
     profile = Profile(
@@ -429,15 +523,20 @@ def fit_message_profile(
 
     # Self-check: the profile must recognise the frame it was fitted on, against the FULL
     # vocabulary rather than just the one name it was given.
+    renderer = make_renderer(font, size, window, spacing)
     recognizer = RenderRecognizer(
-        make_renderer(font, size, window, spacing), prefix, vocabulary,
-        shifts=centred_shifts(offset, 1),
+        renderer, prefix, vocabulary, shifts=centred_shifts(offset, 1),
     )
-    match = recognizer.recognize(anchor_window(gray, band, window, x0_fixed=text_x0))
+    observed = anchor_window(gray, band, window, x0_fixed=text_x0)
+    named, cut = mask_after_name(observed, renderer, suffix, separator)
+    match = recognizer.recognize(named)
     profile.notes = {
         "self_check_name": match.name,
         "self_check_score": round(match.score, 4),
         "self_check_margin": round(match.margin, 4),
+        # Where the item's name ended. None means the tail could not be found, which is worth
+        # seeing in a profile: the fit still passed, but it passed the harder way.
+        "name_ends_at": cut,
         "candidate_bands": len(bands),
         "window": list(window),
         "letter_spacing": spacing,

@@ -234,6 +234,16 @@ def stylesheet() -> str:
         color: {VELLUM};
         border-bottom: 1px solid {MOSS};
     }}
+    /* The name, in the display face and the brightest ink the ribbon uses. It sits on the
+       same row as the navigation, so it has to read as a heading and not as a fifth thing
+       that can be clicked — hence the weight, and the muted 「非官方」 immediately after it,
+       which is small on purpose but never hidden. */
+    QLabel#wordmark {{
+        font-family: {DISPLAY};
+        font-size: 15px;
+        color: {VELLUM};
+        padding-right: 6px;
+    }}
     QLabel#state[tone="recording"] {{ color: {MOSS}; }}
     QLabel#state[tone="attention"] {{ color: {EMBER}; }}
     QLabel#meta {{
@@ -257,6 +267,22 @@ def stylesheet() -> str:
         color: {MUTED};
     }}
     QLabel#hint {{ color: {MUTED}; }}
+    /* The page before it has anything to show. Set in the display face at reading size and
+       centred in the space the ledger will occupy: it is a sentence addressed to the
+       player, not a caption on an absence. */
+    QLabel#empty {{
+        font-family: {DISPLAY};
+        font-size: 15px;
+        color: {MUTED};
+        padding: 40px;
+    }}
+    /* The tally. These are the numbers the page exists to show, so they are the only place
+       in the window where the display face runs large. */
+    QLabel#headline {{
+        font-family: {DISPLAY};
+        font-size: 22px;
+        color: {VELLUM};
+    }}
     QLabel#erasure {{ color: {MUTED}; font-size: 11px; }}
 
     /* Every corner in this window is square. Qt's own styles round some of these by
@@ -291,6 +317,9 @@ def stylesheet() -> str:
         border: none;
     }}
     QComboBox QAbstractItemView::item:selected {{ background: {RULE}; color: {VELLUM}; }}
+    /* No ::separator rule here. It is honoured for a menu and ignored for a list view,
+       which is what a combobox popup is — set here it produced a 32px gap and no line. The
+       rule between groups of dungeons is drawn by RoomyRows, in ui.py. */
     QCheckBox {{ spacing: 8px; }}
     QCheckBox::indicator {{
         width: 14px; height: 14px;
@@ -427,13 +456,88 @@ def _set_attribute(widget, which: int, value: int) -> bool:
         return False
 
 
-def square_corners(widget) -> bool:
-    """Stop Windows 11 rounding a popup. No-op anywhere else.
+def _plain_style_class():
+    """Fusion, with one answer changed: a dropdown is a LIST, not a menu.
 
-    A combobox's list is its own native window, and Windows 11 rounds every one it draws —
-    so the dropdown arrived with soft corners in a window whose every other edge is a hard
-    1px rule. The style sheet cannot reach it: the rounding is applied by the compositor to
-    the window, not by Qt to the widget inside it.
+    Fusion says yes to SH_ComboBox_Popup and `windows11` says no, and that single hint is
+    the difference between two quite different widgets:
+
+        yes   a menu — drawn OVER the combobox, centred on the current entry, inside a
+              container with its own frame and scroll indicators. Those indicators are the
+              white bars that appeared above and below the list, and the overlap is why the
+              control disappeared behind its own dropdown.
+        no    a list — dropped BELOW the combobox, no container chrome, and `maxVisibleItems`
+              is honoured again.
+
+    The rest of Fusion is what squares the corners, so it is kept and only this is answered
+    differently.
+    """
+    from PySide6 import QtWidgets
+
+    class PlainPopup(QtWidgets.QProxyStyle):
+        def styleHint(self, hint, option=None, widget=None, data=None):   # noqa: N802 (Qt)
+            if hint == QtWidgets.QStyle.StyleHint.SH_ComboBox_Popup:
+                return 0
+            return super().styleHint(hint, option, widget, data)
+
+    return PlainPopup
+
+
+# The style the application is drawn with, kept alive for as long as the process is. Qt does
+# NOT take ownership of a style passed to setStyle, and one collected while it is still in
+# use takes the process with it.
+_STYLE = None
+# ...and how it is recognised again. A QProxyStyle does not inherit the name of the style it
+# wraps — it reports an empty one — so "is this already applied?" cannot be asked by name
+# unless a name is put there. Without it every call wrapped the wrapper: proxy over proxy
+# over Fusion, one layer per window built.
+STYLE_NAME = "wddrop-plain"
+
+
+def apply_style(app) -> bool:
+    """Draw the whole application with a plain style. Call once, before any window exists.
+
+    THIS IS WHAT SQUARES THE DROPDOWNS, and it has to be the application's style rather than
+    each popup's.
+
+    From Qt 6.7 the default style on Windows 11 is `windows11`, which paints a combobox popup
+    as a rounded flyout. The style sheet cannot reach that — `border-radius: 0` describes the
+    frame the sheet draws, not the one the style does — and neither can the compositor
+    attribute below, which is about the window and not about what is painted inside it.
+
+    Setting the style on the popup widget was tried first and does NOT work: a widget with a
+    style sheet is wrapped in Qt's own style-sheet style, and handing that widget another
+    base style leaves the wrapper drawing the frame. Measured by screenshotting a real popup
+    of the real window: still an arc some eight pixels deep. Set here, the same popup comes
+    out square, with the sheet colouring it exactly as before.
+
+    Idempotent, so an entry point that does not know whether another already called it can
+    call it anyway.
+    """
+    global _STYLE
+
+    from PySide6 import QtWidgets
+
+    if app is None or app.style().objectName() == STYLE_NAME:
+        return False
+    base = QtWidgets.QStyleFactory.create("Fusion")
+    if base is None:                                   # a Qt build without it: nothing to do
+        return False
+    _STYLE = _plain_style_class()(base)
+    _STYLE.setObjectName(STYLE_NAME)
+    app.setStyle(_STYLE)
+    return True
+
+
+def square_corners(widget, view=None) -> bool:
+    """Stop the COMPOSITOR rounding a popup. No-op anywhere but Windows.
+
+    The other half of the problem, and the smaller one: Windows 11 rounds every window it
+    draws, and a combobox's list is its own window. That rounding is DWM's, applied to the
+    window rather than to the widget, so it is turned off per window as each one appears.
+
+    What is painted INSIDE the window is Qt's business — see `apply_style`, which is what
+    stops the style itself drawing a rounded flyout.
     """
     return _set_attribute(widget, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND)
 

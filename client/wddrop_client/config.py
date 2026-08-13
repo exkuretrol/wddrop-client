@@ -24,7 +24,7 @@ from .consent import ConsentState
 log = logging.getLogger("wddrop.config")
 
 APP_NAME = "wddrop"
-CLIENT_VERSION = "0.1.6"
+CLIENT_VERSION = "0.5.1"
 
 
 def config_dir() -> Path:
@@ -53,6 +53,78 @@ def config_dir() -> Path:
         root = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / APP_NAME
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def hide(path: str | Path) -> bool:
+    """Mark a file hidden, the way the platform actually does it.
+
+    NOT by renaming it. A leading dot hides nothing on Windows — that is a Unix convention,
+    and Explorer shows `.atlas.ja.json` exactly as it shows any other name. Windows has a
+    file ATTRIBUTE for this, so that is what gets set.
+
+    Hidden, not protected: every reader still opens these normally, and a player who has
+    turned on "show hidden files" still sees them. The point is only that the rendered
+    typeface is not the first thing in the folder someone opens to find their records.
+
+    Returns whether the mark was applied, and never raises: failing to hide a file is not a
+    reason to fail the thing that produced it.
+    """
+    if not sys.platform.startswith("win"):
+        return False
+    try:
+        import ctypes
+
+        FILE_ATTRIBUTE_HIDDEN = 0x02
+        ok = ctypes.windll.kernel32.SetFileAttributesW(str(path), FILE_ATTRIBUTE_HIDDEN)
+        return bool(ok)
+    except Exception:                                  # noqa: BLE001
+        log.debug("wddrop: could not hide %s", path, exc_info=True)
+        return False
+
+
+# Marks a build that still carries the parts that are not finished. Bundled by default and
+# left out by `build_exe.py --production`, so what a player receives is decided at BUILD time
+# rather than by anything they can set.
+DEV_MARKER = "DEVELOPMENT"
+
+
+def in_development() -> bool:
+    """Whether the unfinished parts of the window should be shown.
+
+    True in a checkout, because that is what a checkout is for. In a build it is true only
+    when the marker was bundled — a production exe carries no way to turn it back on, which
+    is the point: calibration is offered here for us to test with, and a fit made on a
+    player's machine is a claim nobody has checked against a recording.
+    """
+    if not getattr(sys, "frozen", False):
+        return True
+    for root in (bundled_dir(), program_dir()):
+        if root and (root / DEV_MARKER).exists():
+            return True
+    return False
+
+
+def unhide(path: str | Path) -> None:
+    """Clear the hidden mark, so the file can be written over.
+
+    Windows refuses to open an existing HIDDEN file for writing through a normal create call
+    — it returns "permission denied", not a hint about attributes. So a file this program
+    hides is a file this program can no longer rebuild, which is how marking the atlas turned
+    every rebuild after the first into `[Errno 13] ... atlas.ja.png` on the one screen a new
+    player is looking at.
+
+    Never raises: a file that is not there, or not markable, is not a reason to fail the
+    write that is about to happen anyway.
+    """
+    if not sys.platform.startswith("win"):
+        return
+    try:
+        import ctypes
+
+        FILE_ATTRIBUTE_NORMAL = 0x80
+        ctypes.windll.kernel32.SetFileAttributesW(str(path), FILE_ATTRIBUTE_NORMAL)
+    except Exception:                                  # noqa: BLE001
+        log.debug("wddrop: could not clear attributes on %s", path, exc_info=True)
 
 
 def program_dir() -> Path:
@@ -231,11 +303,16 @@ class ClientConfig:
     # instruction someone else would give. An existing config.json keeps whatever it has,
     # so a dev machine pointed at localhost stays pointed there.
     server_url: str = "https://wizardry-daphne-api.kuaz.dev"
-    # The language the GAME is in. It decides which item names can be read at all, and is
-    # NOT the language of the window — an English Windows running a Traditional Chinese
-    # client is ordinary, and conflating the two would break capture for exactly the people
-    # locale detection is meant to help.
-    locale: str = "zh_tw"
+    # The language the GAME is in. FIXED at Japanese, and no longer a choice: the face the
+    # recogniser needs is readable in the files the game already installed, but only for this
+    # language. In every other one, that face is unreachable and the substitute cannot draw
+    # 28 of the characters Chinese item names use — 375 of 3,478 names, which do not fail
+    # loudly. They become gaps, and a gap is indistinguishable from "nothing dropped".
+    #
+    # Kept as a field rather than a constant because it names which vocabulary and atlas to
+    # load, and every one of those files is per-language. It is NOT the language of the
+    # window: see `ui_locale`, which is still the player's to set.
+    locale: str = "ja"
     # The language of the WINDOW. None means "follow the operating system", which is the
     # default; a real value means the player chose one and it stops following.
     ui_locale: str | None = None
@@ -257,6 +334,19 @@ class ClientConfig:
     # Still deliberately NOT defaulted to anything: "unset" and "I chose the first entry"
     # must stay distinguishable, so this is None until a real choice is made.
     dungeon_id: int | None = None
+    # Whether to keep the captured frames, and whether to keep the walking ones too. Settings,
+    # like everything else on that page — they were the only two controls there that lived
+    # only in the widget, so every launch silently reset them to off and a player who had
+    # turned recording on lost the frames for the very session they turned it on to explain.
+    # The failure is invisible at the moment it happens: nothing looks different until the
+    # frames are wanted and are not there.
+    keep_frames: bool = False
+    keep_all_frames: bool = False
+    # Detailed logging, off by default. A setting rather than a rebuild because the report
+    # that needs it — "it did not record my chest" — arrives from someone who cannot
+    # reproduce it on demand, and asking them to install a debug build is asking them to
+    # stop helping. See logs.py for what each level holds.
+    trace: bool = False
     consent: ConsentState = field(default_factory=ConsentState)
 
     @classmethod
@@ -267,6 +357,11 @@ class ClientConfig:
             cfg.save()
             return cfg
         raw = json.loads(path.read_text(encoding="utf-8"))
+        # The GAME language is no longer stored: it is Japanese. A value left by an older
+        # build would otherwise keep loading a vocabulary this client has no face to draw —
+        # silently, since a name that cannot be rendered simply never matches. `ui_locale`,
+        # the window's own language, is untouched.
+        raw.pop("locale", None)
         raw["consent"] = ConsentState(**{
             k: v for k, v in raw.get("consent", {}).items()
             if k in ConsentState.__dataclass_fields__

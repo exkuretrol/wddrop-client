@@ -48,9 +48,16 @@ def home(tmp_path, monkeypatch):
     return tmp_path
 
 
-def make_config(accepted: bool) -> ClientConfig:
+def make_config(accepted: bool, locale: str = "ja") -> ClientConfig:
+    """The GAME's language, stated rather than inherited.
+
+    The client now defaults to Japanese — that is what makes the game's own typeface
+    readable — but every fixture here is a Chinese recording with a Chinese vocabulary, so
+    these tests say so. A test that silently follows the default tests whichever language
+    the default happens to be.
+    """
     state = ConsentState(accepted_hash=disclaimer_hash() if accepted else None)
-    return ClientConfig(consent=state)
+    return ClientConfig(consent=state, locale=locale)
 
 
 def test_consent_is_a_gate_not_a_checkbox(app, home):
@@ -89,7 +96,8 @@ def test_capture_cannot_start_without_a_calibration(app, home, monkeypatch):
     from wddrop_client.calibration import ProfileStore
     from wddrop_client.ui import MainWindow
 
-    monkeypatch.setattr(ProfileStore, "shipped", classmethod(lambda cls: ProfileStore()))
+    monkeypatch.setattr(ProfileStore, "shipped",
+                        classmethod(lambda cls, locale=None: ProfileStore()))
     window = MainWindow(make_config(accepted=True), data=home)
     assert not window.start.isEnabled()
     assert "not calibrated" in window.cal_label.text()
@@ -158,8 +166,9 @@ def test_a_recorded_session_reaches_the_window_and_stop_works(app, home, monkeyp
 
     if not _profile_for((704, 1241), home / "profile.json"):
         pytest.skip("no calibration for this recording's resolution")
-    window = MainWindow(make_config(accepted=True), data=home)
-    window.locale.setCurrentText("zh_tw")
+    # Through the config: the game language is fixed at Japanese and has no control any
+    # more, but this recording is a Chinese one and the vocabulary has to match the pixels.
+    window = MainWindow(make_config(accepted=True, locale="zh_tw"), data=home)
 
     threads = []
     original = MainWindow._chest
@@ -218,8 +227,14 @@ def test_start_refuses_until_a_dungeon_is_actually_chosen(app, home, monkeypatch
     ]}, ensure_ascii=False), encoding="utf-8")
     for name in ("vocab.zh_tw.json", "atlas.zh_tw.json"):
         (tmp_path / name).write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(ui_mod, "find_data",
-                        lambda pattern, locale: tmp_path / pattern.format(locale=locale))
+    # As the real one behaves: None when the file is not there. Returning a path regardless
+    # made the fixture claim every locale's catalogue existed, which is the one thing this
+    # lookup has to get right now that the window asks for the INTERFACE's language first.
+    def _found(pattern, locale):
+        hit = tmp_path / pattern.format(locale=locale)
+        return hit if hit.exists() else None
+
+    monkeypatch.setattr(ui_mod, "find_data", _found)
 
     window = MainWindow(make_config(accepted=True), data=home)
     assert window.dungeon.currentData() is None, "must open on a placeholder, not a dungeon"
@@ -305,7 +320,7 @@ def test_the_wheel_does_not_edit_a_control_it_only_scrolls_past(app, home):
     window.show()
     window._show_page(3)                     # Settings, where the scrolling happens
     app.processEvents()
-    combo = window.locale
+    combo = window.ui_locale
     before = combo.currentIndex()
 
     def wheel():
@@ -502,7 +517,9 @@ def test_calibration_proposes_the_item_name_instead_of_asking_for_it(app, home):
     from wddrop_client.calibration import propose_item_name
     from wddrop_client.ui import MainWindow
 
-    window = MainWindow(make_config(accepted=True), data=home)
+    # A Chinese shot, so the vocabulary and atlas must be Chinese too. Said through the
+    # config now that the window has no game-language control.
+    window = MainWindow(make_config(accepted=True, locale="zh_tw"), data=home)
     args = window.args_for()
     vocab, fmt, _ = _load_vocab(args)
 
@@ -847,3 +864,300 @@ def test_a_first_run_is_not_told_anything_changed(app, home):
     page = ConsentPage(cfg)
     labels = [w.text() for w in page.findChildren(QtWidgets.QLabel)]
     assert not any("changed" in text for text in labels)
+
+
+def test_closing_during_the_first_run_build_is_not_a_crash(app, home, monkeypatch):
+    """A thread still running while the interpreter tears down dies as "can't register
+    atexit after shutdown" — no traceback a player could report, just a window that vanishes.
+    Closing has to wait for it."""
+    from wddrop_client.ui import AtlasWorker, MainWindow
+
+    class Slow(AtlasWorker):
+        def run(self):                              # noqa: D102
+            self.msleep(200)
+            self.done.emit("")
+
+    monkeypatch.setattr("wddrop_client.ui.AtlasWorker", Slow)
+    window = MainWindow(make_config(accepted=True), data=home)
+    window._build_atlas()
+    assert window._atlas_worker is not None and window._atlas_worker.isRunning()
+
+    window.close()
+
+    assert not window._atlas_worker.isRunning(), "the window closed with a thread still going"
+
+
+def test_the_atlas_is_not_rebuilt_while_a_build_is_running(app, home, monkeypatch):
+    """`_refresh_setup` runs on every page change, and the build takes seconds."""
+    from wddrop_client.ui import AtlasWorker, MainWindow
+
+    started = []
+
+    class Counting(AtlasWorker):
+        def run(self):                              # noqa: D102
+            started.append(1)
+            self.msleep(300)
+            self.done.emit("")
+
+    monkeypatch.setattr("wddrop_client.ui.AtlasWorker", Counting)
+    window = MainWindow(make_config(accepted=True), data=home)
+    window._build_atlas()
+    window._build_atlas()
+    window._build_atlas()
+    window.close()
+
+    assert len(started) == 1, f"started {len(started)} builds"
+
+
+def test_a_chest_is_named_in_the_language_of_the_window(app, home, monkeypatch):
+    """The game is Japanese because this client asked it to be, so every reading is Japanese.
+    The live list is what a player watches WHILE they dive, and it printed `item_name` — the
+    reading — straight from the record, answering in a language they had not chosen. The
+    stats page had gone through the table for weeks; this line never did.
+
+    The fallback matters as much: a reading with no id is still evidence, and must show as
+    what was on screen rather than as a blank or a "?".
+    """
+    import shutil
+
+    names = ROOT / "data" / "names.zh_tw.json"
+    if not names.exists():
+        pytest.skip("names.zh_tw.json not built")
+    shutil.copy(names, home / names.name)
+
+    from wddrop_client.ui import MainWindow
+
+    cfg = make_config(accepted=True, locale="ja")
+    cfg.ui_locale = "zh_tw"
+    window = MainWindow(cfg, data=home)
+    window._chest({"dive": {"elapsed_seconds": 12}, "provenance": "chest", "contents": [
+        {"item_name": "モニヨン銀貨", "item_id": 471000010, "quantity": 2},
+        {"item_name": "読めない名前", "quantity": 1, "qty_unknown": True},
+    ]})
+    line = window.table.item(window.table.rowCount() - 1, 2).text()
+    assert "莫尼翁銀幣 ×2" in line, f"still answering in Japanese: {line}"
+    assert "読めない名前 ×1?" in line, f"lost the reading that has no id: {line}"
+
+
+def test_the_window_is_drawn_with_a_plain_style(app):
+    """Windows 11 rounds a combobox popup twice over: once at the compositor, once in Qt's
+    own `windows11` style, which paints the list as a rounded flyout. Neither
+    `border-radius: 0` nor the compositor attribute touches the second one — the frame is
+    painted by the style, not by the sheet.
+
+    Setting the style on the popup WIDGET was tried and does not work: a widget with a style
+    sheet is wrapped in Qt's style-sheet style, and the wrapper goes on drawing the frame.
+    Measured by screenshotting a real popup of the real window, it stayed an arc some eight
+    pixels deep. It has to be the application's style, so this is the thing to keep true.
+    """
+    from PySide6 import QtWidgets
+
+    from wddrop_client import theme
+
+    theme.apply_style(QtWidgets.QApplication.instance())
+    assert QtWidgets.QApplication.instance().style().objectName() == theme.STYLE_NAME
+
+
+def test_building_a_window_is_enough_to_get_that_style(app, home):
+    """`main()` sets it before anything exists, which is the right place — but a window also
+    gets built by the frozen self-check and by these tests, and a dropdown that is square in
+    one and round in another makes a screenshot in a bug report untrustworthy."""
+    from PySide6 import QtWidgets
+
+    from wddrop_client.ui import MainWindow
+
+    plain = QtWidgets.QStyleFactory.create("Windows")
+    if plain is not None:
+        QtWidgets.QApplication.instance().setStyle(plain)
+    MainWindow(make_config(accepted=True), data=home)
+
+    from wddrop_client import theme
+
+    assert QtWidgets.QApplication.instance().style().objectName() == theme.STYLE_NAME
+
+
+def test_a_dropdown_row_keeps_the_height_it_had_before_the_style_changed(app):
+    """Squaring the popups meant drawing the window with a plain style, and a plain style
+    sizes list rows its own way: the same dungeon picker went from 43px rows to 25px —
+    square corners, and a list too tight to pick from.
+
+    The style sheet cannot fix it. `::item { padding }` and `min-height` are both ignored
+    for this; measured across five combinations, every one still produced a 25px row. The
+    height comes from the delegate's size hint, so that is where it is set — derived from
+    the font, so a player with larger text or a scaled display keeps proportion rather than
+    inheriting this machine's 43.
+    """
+    from wddrop_client.ui import Combo, RoomyRows
+
+    combo = Combo()
+    combo.addItems(["初始的奈落", "貿易水路", "豪雪地帶"])
+    view = combo.view()
+    view.setItemDelegate(RoomyRows(view))
+    assert view.sizeHintForRow(0) == view.fontMetrics().height() + RoomyRows.PAD
+    assert view.sizeHintForRow(0) > 32, "a row this short is the style's, not ours"
+
+
+def test_a_dropdown_is_a_list_below_the_control_not_a_menu_over_it(app):
+    """One style hint decides which of two quite different widgets a dropdown is.
+
+    Fusion — chosen because it squares the corners — says yes to SH_ComboBox_Popup, and that
+    yes means: draw the list OVER the combobox, centred on the current entry, inside a
+    container with its own frame and scroll indicators. Those indicators were the white bars
+    above and below the list, and the centring is why the control vanished behind its own
+    dropdown. Answering no gives the list the old build had: below the control, no chrome,
+    and `maxVisibleItems` honoured again, which is what keeps twenty dungeons from opening a
+    list twice the height of the window.
+    """
+    from PySide6 import QtWidgets
+
+    from wddrop_client import theme
+
+    theme.apply_style(QtWidgets.QApplication.instance())
+    style = QtWidgets.QApplication.instance().style()
+    assert style.styleHint(QtWidgets.QStyle.StyleHint.SH_ComboBox_Popup,
+                           QtWidgets.QStyleOptionComboBox(), None, None) == 0
+
+
+def test_applying_the_style_twice_does_not_wrap_it_twice(app):
+    """A QProxyStyle reports no name of its own, so "already applied?" has to be asked of a
+    name we set. Without it the guard never matched and every window built stacked another
+    proxy on the last one."""
+    from PySide6 import QtWidgets
+
+    from wddrop_client import theme
+
+    theme.apply_style(QtWidgets.QApplication.instance())
+    first = QtWidgets.QApplication.instance().style()
+    assert theme.apply_style(QtWidgets.QApplication.instance()) is False
+    assert QtWidgets.QApplication.instance().style() is first
+
+
+def test_the_picker_offers_every_dungeon_not_just_the_study_ones(app, home, monkeypatch):
+    """A player farming outside the study still has to be able to say where they are.
+
+    The picker was populated from the nineteen dungeons whose junk carries the dungeon's own
+    name — the ones where a mislabelled dive can be CAUGHT — which is the right list for the
+    cross-check and the wrong one to choose from: anywhere else, the dungeon could not be
+    named at all, and a dive recorded without a cross-check is worth more than a dive that
+    could not be recorded.
+    """
+    from wddrop_client import ui as ui_mod
+    from wddrop_client.dungeons import DUNGEONS, STUDY_IDS
+    from wddrop_client.ui import MainWindow
+
+    # As a player's install is: no catalogue file, so the built-in table is the list. A file
+    # beside the client still overrides it, which is why this says which case it is testing.
+    monkeypatch.setattr(ui_mod, "find_data", lambda pattern, locale: None)
+    window = MainWindow(make_config(accepted=True), data=home)
+    assert window.dungeon.itemData(0) is None, "the placeholder carries no id"
+    assert len(DUNGEONS) > len(STUDY_IDS), "the two lists are meant to differ"
+
+    offered = {window.dungeon.itemData(i) for i in range(1, window.dungeon.count())}
+    offered.discard(None)                              # the rules between groups
+    assert offered == set(DUNGEONS), "the picker and the table disagree"
+    assert set(STUDY_IDS) <= offered, "the study's own dungeons must still be there"
+
+
+def test_a_dungeon_is_named_in_the_language_of_the_window(app, home, monkeypatch):
+    """The table carries a name per language. A picker listing 「北穿幽靈城」 to someone reading
+    a Japanese interface asks them to recognise a place by a word their game never showed."""
+    from wddrop_client import ui as ui_mod
+    from wddrop_client.dungeons import name
+    from wddrop_client.ui import MainWindow
+
+    monkeypatch.setattr(ui_mod, "find_data", lambda pattern, locale: None)
+    cfg = make_config(accepted=True, locale="ja")
+    cfg.ui_locale = "ja"
+    window = MainWindow(cfg, data=home)
+    labels = [window.dungeon.itemText(i) for i in range(window.dungeon.count())]
+    assert name(7015, "ja") in labels
+    assert name(7015, "zh_tw") not in labels
+
+
+def test_a_rule_separates_each_group_of_dungeons(app, home, monkeypatch):
+    """The leading digit of an id is the group — 7015 and 7001 are both 7 — and the game has
+    no word for that grouping, so the picker shows a rule and no heading: a label would be
+    one we invented. There is a rule at every boundary and nowhere else, and none before the
+    first group or after the last.
+    """
+    from PySide6 import QtCore
+
+    from wddrop_client import ui as ui_mod
+    from wddrop_client.dungeons import DUNGEONS
+    from wddrop_client.ui import MainWindow
+
+    monkeypatch.setattr(ui_mod, "find_data", lambda pattern, locale: None)
+    window = MainWindow(make_config(accepted=True), data=home)
+
+    groups, rules = [], 0
+    for i in range(1, window.dungeon.count()):
+        if window.dungeon.itemData(i, QtCore.Qt.AccessibleDescriptionRole) == "separator":
+            rules += 1
+            groups.append(None)
+        else:
+            groups.append(window.dungeon.itemData(i) // 1000)
+
+    assert rules == len({key // 1000 for key in DUNGEONS}) - 1, "one rule between each group"
+    assert groups[0] is not None and groups[-1] is not None, "no rule at either end"
+    # Every rule sits where the group changes, and every change has one.
+    seen = [g for g in groups if g is not None]
+    assert seen == sorted(seen), "the list is not grouped"
+    for before, at, after in zip(groups, groups[1:], groups[2:]):
+        if at is None:
+            assert before != after, "a rule inside a group"
+
+
+def test_a_rule_cannot_be_chosen_as_a_dungeon(app, home, monkeypatch):
+    """It carries no id, which is what the placeholder carries too — and `currentData() is
+    None` is how the window knows no dungeon has been picked. Qt skips separators when
+    selecting, and this is the test that says so out loud."""
+    from PySide6 import QtCore
+
+    from wddrop_client import ui as ui_mod
+    from wddrop_client.ui import MainWindow
+
+    monkeypatch.setattr(ui_mod, "find_data", lambda pattern, locale: None)
+    window = MainWindow(make_config(accepted=True), data=home)
+    rule = next(i for i in range(window.dungeon.count())
+                if window.dungeon.itemData(i, QtCore.Qt.AccessibleDescriptionRole)
+                == "separator")
+    window.dungeon.setCurrentIndex(rule)
+    assert window.dungeon.currentData() is None
+    assert not window.start.isEnabled(), "a rule was accepted as a dungeon"
+
+
+def test_only_input_controls_are_kept_narrow(app, home):
+    """A control is as wide as what it holds; a row of prose or a path is not a control.
+
+    Capping whatever a caller passed also caught the row that shows where a player's data
+    lives — a folder path and a button squeezed into the width of a menu, so the path wrapped
+    onto a second line. Which widgets want the narrow treatment is a property of what they
+    ARE, so it is decided once rather than at each call.
+    """
+    from wddrop_client import ui as ui_mod
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    assert window.ui_locale.maximumWidth() == ui_mod.SETTING_WIDTH
+    assert window.fps.maximumWidth() == ui_mod.SETTING_WIDTH
+
+    holder = window.folder_label.parentWidget()
+    assert holder.maximumWidth() > ui_mod.SETTING_WIDTH, "the data path was boxed in"
+
+
+def test_the_data_count_is_over_what_the_client_needs(app, home, monkeypatch):
+    """The dungeon list is built into the client now and a catalogue file only overrides it,
+    so counting the catalogue made a complete install report "2 of 3" — which reads as
+    something having gone missing."""
+    from wddrop_client import ui as ui_mod
+    from wddrop_client.ui import MainWindow
+
+    def found(pattern, locale):
+        # Everything the client needs, and no catalogue: an ordinary install.
+        return None if pattern.startswith("catalog") else home / pattern.format(locale=locale)
+
+    monkeypatch.setattr(ui_mod, "find_data", found)
+    window = MainWindow(make_config(accepted=True), data=home)
+    window._refresh_setup()
+    assert "2" in window.data_label.text()
+    assert "3" not in window.data_label.text(), window.data_label.text()

@@ -99,3 +99,70 @@ def test_only_the_one_known_qt_message_is_filtered():
         "QFont::setPixelSize: Pixel size <= 0 (0)",
     ):
         assert not theme.is_benign(real), real
+
+
+def test_every_string_the_window_shows_has_a_translation():
+    """`t()` falls back to the English it was keyed by, which is the right behaviour at run
+    time and a silent hole at development time: a new sentence simply appears in English for
+    every player who did not choose it. Three did, in one sitting — the whole point of the
+    window speaking six languages is that it speaks them consistently.
+    """
+    import ast
+
+    source = (ROOT / "client" / "wddrop_client" / "ui.py").read_text(encoding="utf-8")
+    missing = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+        if name != "t":
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            if first.value not in STRINGS:
+                missing.append(f"ui.py:{node.lineno}  {first.value[:70]}")
+    assert not missing, "untranslated:\n  " + "\n  ".join(missing)
+
+
+def _backslashes_in_f_string_expressions(source: str, where: str) -> list[str]:
+    """Every `{...}` inside an f-string whose text contains a backslash.
+
+    Legal from 3.12, a SyntaxError before it. Checked by reading the source segment of each
+    formatted value rather than by re-parsing, because `ast.parse(feature_version=(3, 11))`
+    does NOT restore the old rule — a guard written that way passes on the very file that
+    broke the build, which is how this one was first written.
+    """
+    import ast
+
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        for part in node.values:
+            if not isinstance(part, ast.FormattedValue):
+                continue
+            segment = ast.get_source_segment(source, part.value) or ""
+            if "\\" in segment:
+                found.append(f"{where}:{part.value.lineno}  {segment[:60]}")
+    return found
+
+
+def test_no_f_string_expression_carries_a_backslash():
+    """`requires-python = ">=3.11"`, and the build has to agree with it.
+
+    Caught the hard way. An escaped apostrophe inside an f-string parsed fine on the machine
+    it was written on, and the Windows build — which picked up a 3.9 interpreter — dropped
+    `wddrop_client.ui` from the bundle over it. PyInstaller reports that as one line of
+    `invalid module` among hundreds, and the exe it produces looks finished right until it is
+    run, where it is a traceback before the window.
+    """
+    # The detector first, on the line that actually broke: a check that cannot fail is worse
+    # than no check, because it is read as evidence.
+    sample = 'x = f"{t(\'the game\\\'s own typeface\')}"'
+    assert _backslashes_in_f_string_expressions(sample, "sample"), "the detector is asleep"
+
+    broken = []
+    for path in sorted((ROOT / "client" / "wddrop_client").rglob("*.py")):
+        broken += _backslashes_in_f_string_expressions(
+            path.read_text(encoding="utf-8"), str(path.relative_to(ROOT)))
+    assert not broken, "f-string expressions with a backslash:\n  " + "\n  ".join(broken)
