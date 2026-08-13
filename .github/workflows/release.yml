@@ -87,7 +87,19 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pyinstaller PySide6-Essentials pillow numpy mss pydantic httpx
+      # ASKED FOR, not listed here. build_exe refuses to build without every name in its
+      # RUNTIME_IMPORTS — PyInstaller can only put in the exe what is installed beside it,
+      # and a missing one is a capability the player silently does not have: no UnityPy is
+      # no atlas built from the game's own font, no windows-capture is capture falling back
+      # to the whole screen and reading whatever sits in front of the game.
+      #
+      # This step used to carry its own copy of that list. The two drifted, and the first
+      # build this repository ever ran failed on both of those names.
+      - name: Install what the build says it needs
+        run: |
+          python build_exe.py --requirements > requirements-build.txt
+          type requirements-build.txt
+          pip install pyinstaller -r requirements-build.txt
 
       - name: Build
         run: python build_exe.py

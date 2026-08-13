@@ -230,6 +230,9 @@ def entry_script(target: Path) -> Path:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--requirements", action="store_true",
+                    help="print what has to be installed to build, one per line, so a "
+                         "workflow can install exactly this list instead of keeping its own")
     ap.add_argument("--with-atlas", action="store_true",
                     help="bundle a prebuilt atlas, for a build that must work without the "
                          "game installed (see the licence note)")
@@ -238,6 +241,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--production", action="store_true",
                     help="leave out the parts that are still in development (calibration)")
     args = ap.parse_args(argv)
+
+    if args.requirements:
+        # ONE PER LINE, for a requirements file rather than a command line. Half of these
+        # carry a `>=`, which is a redirection operator to the shell that would expand them
+        # — the same reason the message below quotes them — and a file has no such opinion.
+        #
+        # Exists so a build workflow does not keep a second copy of this list. It kept one,
+        # the two drifted, and the exe would have shipped without the module that reads the
+        # game's own window.
+        print("\n".join(install for _module, install, _why in RUNTIME_IMPORTS))
+        return 0
 
     # The interpreter that gets bundled, checked BEFORE anything is built. `uv run` picks
     # whatever it finds when nothing pins a version, and it found 3.9 here — below what the
@@ -255,8 +269,23 @@ def main(argv: list[str] | None = None) -> int:
 
     import importlib.util
 
+    def installed(module: str) -> bool:
+        """Is it importable? `find_spec` cannot answer that on its own.
+
+        For a top-level name it returns None when absent, but for a SUBMODULE it imports the
+        parent first and raises ModuleNotFoundError when that is missing. Exactly one entry
+        here is a submodule — `windows_capture.windows_capture` — so the one dependency most
+        likely to be missing on a fresh machine was the one that crashed this script with a
+        traceback instead of printing the message written for it. Measured on the first CI
+        build this repository ever ran.
+        """
+        try:
+            return importlib.util.find_spec(module) is not None
+        except (ImportError, ValueError):
+            return False
+
     absent = [(module, install, why) for module, install, why in RUNTIME_IMPORTS
-              if importlib.util.find_spec(module) is None]
+              if not installed(module)]
     if absent:
         print("[!] not installed here, so PyInstaller cannot put them in the exe:")
         for module, _install, why in absent:
