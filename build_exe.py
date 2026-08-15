@@ -317,7 +317,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.release_notes is not None:
         version = args.release_notes or _client_version()
-        print(release_notes(version), end="")
+        # WRITTEN AS UTF-8 REGARDLESS OF THE CONSOLE. The release job runs this on Windows
+        # and redirects it into NOTES.md, where stdout is cp1252 — and the notes quote the
+        # game, so they carry 「10,000バイン紙幣」 and 「だれが開ける？」 and every × in a
+        # quantity. That is a UnicodeEncodeError at character 4,469 and a release that does
+        # not happen, for a reason no one would guess from "the build failed".
+        sys.stdout.buffer.write(release_notes(version).encode("utf-8"))
+        sys.stdout.buffer.flush()
         return 0
     if args.requirements:
         # ONE PER LINE, for a requirements file rather than a command line. Half of these
