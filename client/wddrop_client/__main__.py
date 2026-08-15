@@ -49,20 +49,64 @@ def _data_path(args, name: str) -> Path:
 
 
 def _load_vocab(args):
+    """The item names, found the way the WINDOW finds them.
+
+    `--vocab` defaults to a bare `vocab.ja.json`, which resolves against the working
+    directory — so the command line worked from the folder the client was unpacked into and
+    nowhere else, while the window searched the program's folder, the data folder and the
+    bundle. Same file, two ways of looking for it, and only one of them told you what it had
+    tried.
+    """
     from .capture.ocr import MessageFormat, Vocabulary
 
     path = Path(args.vocab)
     if not path.exists():
-        raise SystemExit(f"[!] vocabulary not found: {path}\n    build it with tools/build_vocab.py")
+        from .ui import find_data
+
+        found = find_data(path.name, getattr(args, "locale", None) or "ja")
+        if found is not None:
+            path = found
+            # WRITTEN BACK, because this is not the only reader. The pickaxe messages, the
+            # dungeon hints and the item index are all built from `args.vocab` further down,
+            # and resolving it privately here left them opening the bare name — which fails
+            # with a FileNotFoundError from somewhere that says nothing about vocabularies.
+            args.vocab = str(path)
+    if not path.exists():
+        raise SystemExit(
+            f"[!] vocabulary not found: {args.vocab}\n"
+            f"    Looked beside the client and in your data folder ({data_dir()}).\n"
+            f"    Name one with --vocab, or build it with tools/build_vocab.py")
     return Vocabulary.load(path), MessageFormat.from_vocab(path), json.loads(path.read_text(encoding="utf-8"))
 
 
 def _font_candidates(args) -> list[str]:
+    r"""What to render candidates with, defaulting to the atlas this client already built.
+
+    `--fonts` used to be required, and that made the command line a trap: the client renders
+    from an ATLAS built out of the player's own copy of the game, and nothing on the command
+    line said so — so the obvious thing to pass is the extracted `fonts\*.ttf`, which is a
+    different typeface from the one on screen. Measured on a real 1600x900 shot, calibrating
+    with BaseFont_ChineseTraditional.ttf scored 0.547 and failed its own check; the atlas
+    beside it fits the same shot at 0.823.
+
+    The window has always passed the atlas. This makes the two agree.
+    """
     import glob
 
     if args.fonts:
         return sorted(glob.glob(args.fonts))
-    raise SystemExit("[!] --fonts is required (glob for the game's extracted *.ttf)")
+    from .ui import find_data
+
+    locale = getattr(args, "locale", None) or "ja"
+    found = [find_data("atlas.{locale}.json", locale),
+             find_data("atlas.{locale}.scenario.json", locale)]
+    atlases = [str(p) for p in found if p is not None]
+    if atlases:
+        return atlases
+    raise SystemExit(
+        "[!] no atlas found for this locale, and --fonts was not given.\n"
+        "    The client builds `atlas.{0}.json` from your copy of the game on first run —\n"
+        "    open the window once, or pass --fonts pointing at one.".format(locale))
 
 
 def _render_source_override(args) -> str | None:
@@ -207,23 +251,51 @@ def _grab_window(delay: float):
     return next(iter(source.frames())).image
 
 
-def _guided_shot(what: str, check, delay: float, path: Path):
+# How many frames the walking shot actually takes, and how far apart. The extra ones are the
+# only evidence that separates the minimap's chrome from its interior — see
+# calibration.choose_hud_region. The gap is long enough for a walking player to have moved
+# somewhere else and short enough that nobody notices they are being asked to keep walking.
+WALK_BURST, WALK_GAP = 3, 0.8
+
+
+def _grab_burst(delay: float, count: int = WALK_BURST, gap: float = WALK_GAP):
+    """`count` frames of the game window, `gap` seconds apart, after one countdown."""
+    import time
+
+    frames = [_grab_window(delay)]
+    for _ in range(count - 1):
+        time.sleep(gap)
+        frames.append(_grab_window(0))
+    return frames
+
+
+def _burst_paths(path: Path, count: int) -> list[Path]:
+    """walk.png, walk.2.png, walk.3.png — the first keeps its name so nothing else moves."""
+    return [path] + [path.with_name(f"{path.stem}.{i}{path.suffix}") for i in range(2, count + 1)]
+
+
+def _guided_shot(what: str, check, delay: float, path: Path, burst: int = 1):
     """Prompt, capture, validate, and offer a retry until the shot is usable.
 
     Validating here rather than at fit time is the point: "your profile did not work" is a
     poor thing to discover after the fact, when the game state that produced it is gone.
+
+    `burst` takes several frames a moment apart and returns them all. Only the first is
+    validated — the others exist to be COMPARED with it, and a comparison is what says which
+    part of the minimap panel is furniture and which part redraws.
     """
     while True:
         print(f"\n  {what}")
         answer = input("  ready? [ENTER = capture / s = skip]: ").strip().lower()
         if answer == "s":
             return None
-        image = _grab_window(delay)
-        problem = check(image)
+        images = _grab_burst(delay, burst) if burst > 1 else [_grab_window(delay)]
+        problem = check(images[0])
         if problem is None:
-            image.save(path)
+            for image, where in zip(images, _burst_paths(path, len(images))):
+                image.save(where)
             print(f"    looks good -> {path}")
-            return image
+            return images if burst > 1 else images[0]
         print(f"    [!] {problem}")
         if input("    try again? [Y/n]: ").strip().lower() in ("n", "no"):
             return None
@@ -247,38 +319,20 @@ def _walk_shot_problem(image):
 
 
 def _check_hud_separation(profile, walk_image, drop_image) -> None:
-    """The captured pair must actually distinguish walking from a chest.
+    """Print what `calibration.hud_findings` says about the pair, and the scores either way.
 
-    This is the check that means something. The HUD template is cut from the walk shot, so it
-    scores ~1.0 there by construction; what matters is that it scores LOW on the drop shot.
-    If both look alike, the two captures show the same state -- two walk shots, or two chest
-    shots -- and episode bracketing would never fire. Better to say so now than to let a
-    session record nothing and leave the cause to be guessed at.
+    The findings themselves live in `calibration` because the WINDOW needs them too, and for
+    three versions it did not have them: a fit made there could carry a template cut from a
+    wall and say nothing, which is the failure that records a whole dive as one chest.
     """
-    from .calibration import HUD_STRAIGHTNESS_MIN, hud_straightness
+    from .calibration import hud_findings
     from .capture.hud import HudDetector
 
-    # Does the region even look like a PANEL? The separation check below compares two shots
-    # and a patch of dungeon wall passes it easily — the two shots are of different places,
-    # so anything in them differs. That is how a photograph of rock was stored as the HUD
-    # template at 1920x1080: it separated the shots perfectly and matched 13 frames in 2341.
-    if profile.hud_region:
-        straight = hud_straightness(walk_image, tuple(profile.hud_region))
-        if straight < HUD_STRAIGHTNESS_MIN:
-            print(f"[!] the region found for the minimap does not look like a panel edge "
-                  f"(straightness {straight:.2f}, expected {HUD_STRAIGHTNESS_MIN:.2f}+).")
-            print("    Check hud_template.png: it should show part of the minimap's frame, "
-                  "not scenery.")
-            print("    If it shows a wall, take the walk shot with the minimap OPEN.")
-
-    det = HudDetector.from_profile(profile)
-    walk_score = det.read(walk_image.convert("L")).score
-    drop_score = det.read(drop_image.convert("L")).score
-    print(f"[*] HUD check: walk shot {walk_score:+.3f}, drop shot {drop_score:+.3f}")
-    if walk_score - drop_score < 0.3:
-        print("[!] these two shots look alike to the HUD detector. The walk shot should show "
-              "the minimap and the drop shot should not — otherwise chests will never be "
-              "bracketed. Re-run calibrate and check each capture.")
+    detector = HudDetector.from_profile(profile)
+    print(f"[*] HUD check: walk shot {detector.read(walk_image.convert('L')).score:+.3f}, "
+          f"drop shot {detector.read(drop_image.convert('L')).score:+.3f}")
+    for finding in hud_findings(profile, walk_image, drop_image):
+        print(f"[!] {finding}")
 
 
 def _drop_shot_problem(image):
@@ -310,9 +364,14 @@ def cmd_calibrate(cfg: ClientConfig, args) -> int:
         print(f"[*] game window: {win.width}x{win.height} ({win.process or 'unknown process'})")
         walk_path = _data_path(args, "walk.png")
         drop_path = _data_path(args, "drop.png")
+        # KEEP WALKING, and it is not a nicety: the frames are compared with each other to
+        # find the part of the minimap panel that does not change. Standing still makes every
+        # band look stable, including the map interior, which is the one that must not be
+        # matched. Calibration says so and falls back to the old rule if it happens anyway.
         walk = _guided_shot(
-            "STEP 1/2 — stand in a dungeon with the minimap visible top-right.",
-            _walk_shot_problem, args.delay, walk_path)
+            "STEP 1/2 — walk around in a dungeon, minimap visible top-right, and KEEP WALKING "
+            "for a few seconds after the countdown.",
+            _walk_shot_problem, args.delay, walk_path, burst=WALK_BURST)
         # Quoted from the locale's OWN template rather than written out here: the wording
         # this asked for was Chinese whatever language the client was reading in, which is
         # the one instruction a player cannot follow by guessing.
@@ -345,12 +404,25 @@ def cmd_calibrate(cfg: ClientConfig, args) -> int:
           f"size={profile.font_size}px offset={profile.offset} "
           f"spacing={profile.letter_spacing:+.1f} score={profile.calibration_score:.3f}")
     print(f"[+] self-check: {profile.notes}")
+    if (profile.notes or {}).get("name_ends_at") is None:
+        # The game WRAPS a long message rather than clipping it, so the wording after the
+        # name can be on a row this shot's band does not cover. The fit still passed — it is
+        # checked against the name either way — but it was fitted against ink no candidate
+        # covers, and letter spacing is the part of it that suffers.
+        print("[!] that message wrapped onto a second line, so the fit had less to go on.")
+        print("    It passed its own check. If readings look poor later, calibrate again on")
+        print("    a chest whose whole sentence fits on one row.")
 
     if args.walk_shot:
         tpl = _data_path(args, "hud_template.png")
-        walk_image = Image.open(args.walk_shot)
-        profile = fit_hud(profile, walk_image, template_path=tpl)
-        print(f"[+] HUD template captured -> {tpl}")
+        # EVERY frame of the burst that is still on disk, not just the one named. A rerun with
+        # `--walk-shot walk.png` finds walk.2.png and walk.3.png beside it and fits the way
+        # the guided path does; a lone screenshot falls back to the density search.
+        walking = [Image.open(p) for p in _burst_paths(Path(args.walk_shot), WALK_BURST)
+                   if p.exists()]
+        walk_image = walking[0]
+        profile = fit_hud(profile, walking, template_path=tpl, absent=shot)
+        print(f"[+] HUD template captured from {len(walking)} frame(s) -> {tpl}")
         _check_hud_separation(profile, walk_image, shot)
     else:
         print("[!] no --walk-shot: HUD detection disabled, so dive/episode bracketing will not work")
@@ -452,20 +524,34 @@ def _fps_for(args) -> float:
     return LIVE_DEFAULT_FPS
 
 
-def _session_record_dir(base):
-    """A fresh subdirectory per session.
+def _session_record_dir(base, size=None):
+    """`<capture>/<width>x<height>/session-<stamp>` — a fresh directory per session, under
+    the resolution it was recorded at.
 
     Frames are numbered from 1 each run, so recording twice into the same directory
     OVERWRITES and interleaves the two sessions — which silently produced a recording that
     was two runs mixed together, and a replay that disagreed with the live run it was
     supposed to reproduce. One directory per session makes that impossible.
+
+    THE RESOLUTION IS PART OF THE PATH because it is the first thing anyone asks of a
+    recording. Everything about reading a frame is fitted per resolution — the band, the
+    panel's box, the letter spacing, the HUD template — so a folder of sessions at mixed
+    sizes is a folder that has to be opened one session.json at a time to be sorted, and
+    every question about a fault ("does this happen at 704 as well?") starts with that
+    sorting. Named with `ProfileStore.key_for`, so the folder and the calibration it belongs
+    to are spelled the same way.
     """
     if not base:
         return None
     from datetime import datetime, timezone
 
+    from .calibration import ProfileStore
+
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return Path(base) / f"session-{stamp}"
+    root = Path(base)
+    if size:
+        root = root / ProfileStore.key_for(size)
+    return root / f"session-{stamp}"
 
 
 def _select_profile(args, size=None):
@@ -500,6 +586,20 @@ def _select_profile(args, size=None):
         chosen = baked or mine
         if chosen is not None:
             if baked is not None and mine is not None:
+                # WHAT THE SHIPPED FIT DOES NOT SAY, the local one may still answer. The
+                # shipped fit replaces the player's for everything it states — that is the
+                # point of it winning — but the mining panel's geometry is LEARNED at run
+                # time, on their machine, from a panel nobody could photograph for a fit. If
+                # it were dropped with the rest, every session would re-fit the panel and
+                # then save the answer into an entry that is outranked, so the same seconds
+                # would be spent again on the next run and forever after.
+                #
+                # Gaps only: a value the shipped fit carries is never overwritten.
+                for field in ("panel_font_size", "panel_letter_spacing", "panel_font_path",
+                              "panel_data_version"):
+                    learned = getattr(mine, field, None)
+                    if learned is not None and getattr(baked, field, None) is None:
+                        setattr(baked, field, learned)
                 log.info("wddrop: using the shipped calibration for %s, not the one fitted "
                          "here (%dpx %+.1f vs %dpx %+.1f)", ProfileStore.key_for(size),
                          baked.font_size, baked.letter_spacing,
@@ -508,6 +608,23 @@ def _select_profile(args, size=None):
                 log.info("wddrop: using the calibration shipped for %s",
                          ProfileStore.key_for(size))
             return chosen
+        # THE FRAME MAY BE AN ENLARGEMENT OF ONE OF THEM. The game can only ask Unity for
+        # borderless fullscreen, so a 1920x1080 game fills a 2560x1440 or 4K desktop by being
+        # scaled up — and that is the same picture, not a new resolution to calibrate. See
+        # calibration.scaled_from for why it cannot be turned off, and the measured cost.
+        from .calibration import scaled_from
+
+        match = scaled_from(size, set(store.sizes()) | set(shipped.sizes()))
+        if match is not None:
+            source_size, scale = match
+            picked = shipped.get(source_size) or store.get(source_size)
+            if picked is not None:
+                log.info("wddrop: capturing %s, reading it at %s (scaled by %.3fx). The game "
+                         "can only do BORDERLESS fullscreen, so the window is the desktop's "
+                         "size while the render is not.",
+                         ProfileStore.key_for(size), ProfileStore.key_for(source_size), scale)
+                _warn_if_the_game_renders_smaller(source_size)
+                return picked
         raise SystemExit(
             f"[!] no calibration for {ProfileStore.key_for(size)}.\n"
             f"    Calibrated here: {', '.join(store.keys()) or 'none'}\n"
@@ -523,6 +640,35 @@ def _select_profile(args, size=None):
     if single is not None:
         return single
     return Profile.load(_data_path(args, PROFILE_NAME))
+
+
+def _warn_if_the_game_renders_smaller(reading_at) -> None:
+    """The one thing resampling cannot fix, said out loud.
+
+    The layout is right whatever the game renders at — the render resolution cancels out of
+    `units * height / 1920` when the compositor stretches it to the display. The INK does
+    not: a 1280x720 render enlarged to 1440p and resampled back scored min 0.5626 over the
+    same 15 confirmed lines that a 1920x1080 render scored 0.8473 on, and 0.5626 is under
+    the 0.60 gate — i.e. one reading lost, silently, because that is what an under-gate line
+    is meant to be.
+    """
+    try:
+        from .capture.window import rendered_resolution
+
+        rendered = rendered_resolution()
+    except Exception:                                  # noqa: BLE001 — a hint, never a blocker
+        return
+    if not rendered:
+        return
+    if rendered[1] < reading_at[1]:
+        print(f"[!] the game is rendering {rendered[0]}x{rendered[1]} and its picture is "
+              f"being read at {reading_at[0]}x{reading_at[1]}.")
+        print("    Enlarging cannot put back ink that was never drawn, and a line that "
+              "falls under the")
+        print(f"    recogniser's gate is DROPPED rather than guessed. Set the game's own "
+              f"resolution to at least {reading_at[0]}x{reading_at[1]}.")
+    else:
+        log.info("wddrop: the game renders %dx%d, read at %dx%d", *rendered, *reading_at)
 
 
 def _live_size(args) -> tuple[int, int] | None:
@@ -625,7 +771,7 @@ def _build_runner(cfg: ClientConfig, args, size=None):
     runner = CaptureRunner(
         profile, recognizer, hud, tracker, message_format=fmt,
         renderer=renderer, prefix=prefix, review_queue=queue,
-        record_dir=_session_record_dir(getattr(args, "record", None)),
+        record_dir=_session_record_dir(getattr(args, "record", None), profile.frame_size),
         record_mode=getattr(args, "record_mode", "episodes"),
         dungeon_hints=hints,
         pickaxe_watch=watch,
@@ -717,7 +863,11 @@ def cmd_run(cfg: ClientConfig, args) -> int:
     source = open_source(
         args.source, fps=args.fps,
         strips=_capture_strips(_profile, bool(getattr(args, "record", None))),
-        expect_size=tuple(_profile.frame_size),
+        # WHAT THE WINDOW IS, not what the calibration wants it to be: in borderless
+        # fullscreen those differ, and matching a window by the calibrated size would then
+        # rule out the only window there is.
+        expect_size=live_size or tuple(_profile.frame_size),
+        profile_size=tuple(_profile.frame_size),
     )
     runner, profile = _build_runner(cfg, args, live_size)
 
@@ -793,12 +943,16 @@ def cmd_replay(cfg: ClientConfig, args) -> int:
     a recording an authoritative source — when a recognition bug is fixed, the data can be
     rebuilt from the frames instead of being re-collected in game.
     """
-    from .capture.source import open_source
+    from .capture.source import _to_profile, open_source
     from .config import spool_path
 
     fps = _fps_for(args)
     source = open_source(args.source, fps=fps)
     runner, profile = _build_runner(cfg, args, _peek_size(args.source))
+    # A recording made on a screen larger than the calibration — see calibration.scaled_from.
+    # Wrapped here rather than at open_source so a bad path is still reported before the
+    # render index is built.
+    source = _to_profile(source, tuple(profile.frame_size))
     captured: list[dict] = []
     spool = runner.on_event
     if args.spool:
@@ -905,6 +1059,29 @@ def cmd_windows(cfg: ClientConfig, args) -> int:
     return 0
 
 
+def _against_what_was_confirmed(existing, read_items) -> tuple[bool, list[str]]:
+    """What you already said it was, beside what the client says now.
+
+    Only the second of those was printed. So re-running `verify` over a session that had
+    been confirmed answered the wrong question: it showed the NEW reading, said "already
+    confirmed", and never compared the two — while a confirmed session is the only ground
+    truth this project has, and re-reading it is how a change to the reader gets checked.
+
+    Returns (they agree, lines to print). The stored verdict and who gave it come along
+    because "confirmed by me last week" and "corrected from a transcript" are not the same
+    evidence.
+    """
+    same = list(existing.true_items) == list(read_items)
+    lines = [f"    you confirmed: {'; '.join(existing.true_items) or '(nothing)'}"
+             f"   [{existing.verdict}, {existing.verified_by or 'unknown'}]"]
+    if same:
+        lines.append("    the client reads the same thing now")
+    else:
+        lines.append(f"    ** DIFFERS ** it now reads: "
+                     f"{'; '.join(read_items) or '(nothing)'}")
+    return same, lines
+
+
 def cmd_verify(cfg: ClientConfig, args) -> int:
     """Walk recorded chests and record what they ACTUALLY contained.
 
@@ -912,7 +1089,7 @@ def cmd_verify(cfg: ClientConfig, args) -> int:
     Confirmations are keyed by session + chest index, so they survive re-replaying the same
     recording after a recogniser change -- which is when they matter most.
     """
-    from .capture.source import open_source
+    from .capture.source import _to_profile, open_source
     from .verify import (CONFIRMED, CORRECTED, ChestTruth, TruthStore, parse_item,
                          parse_transcript, split_items)
 
@@ -921,7 +1098,8 @@ def cmd_verify(cfg: ClientConfig, args) -> int:
     transcript = (parse_transcript(Path(args.transcript).read_text(encoding="utf-8"))
                   if getattr(args, "transcript", None) else None)
     source = open_source(args.source, fps=_fps_for(args))
-    runner, _ = _build_runner(cfg, args, _peek_size(args.source))
+    runner, verify_profile = _build_runner(cfg, args, _peek_size(args.source))
+    source = _to_profile(source, tuple(verify_profile.frame_size))
     captured: list[dict] = []
     runner.on_event = captured.append
     runner.run(source, dungeon_id=args.dungeon, floor_id=args.floor)
@@ -937,8 +1115,21 @@ def cmd_verify(cfg: ClientConfig, args) -> int:
         if unknown:
             print(f"    [!] not item names in this locale's vocabulary: {', '.join(unknown)}")
 
-    print(f"\n{len(captured)} chest(s) read from {session}\n")
-    for event in captured:
+    # A PICKAXE BREAK IS A READING, and the one with the most to lose from being wrong: a
+    # false break spends a pickaxe the player still has. It is not on the event stream — the
+    # wire has no provenance for it — so it is merged in here, in time order, and confirmed
+    # like anything else. Without this the tool that exists to check readings could not see
+    # the readings hardest to trust.
+    readings = sorted(captured + list(getattr(runner, "pickaxe_events", [])),
+                      key=lambda e: (e.get("dive") or {}).get("elapsed_seconds") or 0)
+    # How this run compares with what was confirmed BEFORE it — the only regression figure
+    # there is, since the store's own accuracy is what the reader scored on the day it was
+    # verified rather than what it scores now.
+    agreed = differed = 0
+    chests = sum(1 for e in readings if e.get("provenance") != "pickaxe_break")
+    breaks = len(readings) - chests
+    print(f"\n{chests} reading(s) and {breaks} pickaxe break(s) from {session}\n")
+    for event in readings:
         event["session_label"] = session
         key = TruthStore.key_for(event)
         existing = store.get(key)
@@ -948,7 +1139,9 @@ def cmd_verify(cfg: ClientConfig, args) -> int:
             format_item(c["item_name"], None if c.get("qty_unknown") else c["quantity"])
             for c in event["contents"]
         ]
-        print(f"  {key}  (@{(event.get('dive') or {}).get('elapsed_seconds')}s)")
+        kind = ("pickaxe broke" if event.get("provenance") == "pickaxe_break"
+                else "vein" if event.get("provenance") == "mining" else "chest")
+        print(f"  {key}  {kind}  (@{(event.get('dive') or {}).get('elapsed_seconds')}s)")
         if not event["contents"]:
             print("    read: (nothing)")
         for c in event["contents"]:
@@ -957,9 +1150,25 @@ def cmd_verify(cfg: ClientConfig, args) -> int:
             # immediately, rather than being remembered and hunted for afterwards.
             src = c.get("source_frame", "?")
             print(f"    - {c['item_name']:<24} {qty:<5} {src}")
-        if existing and not args.again:
-            print(f"    already {existing.verdict}; use --again to revisit\n")
-            continue
+        if existing:
+            same, lines = _against_what_was_confirmed(existing, read_items)
+            agreed += same
+            differed += not same
+            for line in lines:
+                print(line)
+            # THE REPLAY CANNOT BE NARROWED — every frame has to be read again to produce
+            # these readings at all — but the QUESTIONS can, and a session is 14 of them.
+            # `--again` asks about all of them; `--differing` asks only where the client now
+            # says something other than what was confirmed, which is the case that actually
+            # needs a person: either the reader improved and the old answer was wrong, or it
+            # regressed and the old answer still stands. Nobody should have to re-answer
+            # thirteen agreements to reach the one disagreement.
+            ask = args.again or (getattr(args, "differing", False) and not same)
+            if not ask:
+                print("    use --again to change what you confirmed"
+                      + ("" if same else ", or --differing to be asked only about these")
+                      + "\n")
+                continue
 
         if transcript is not None:
             if key not in transcript:
@@ -977,13 +1186,22 @@ def cmd_verify(cfg: ClientConfig, args) -> int:
             print(f"    {verdict} ({args.verified_by})\n")
             continue
 
-        answer = input("    correct? [y / n = type the real items / s = skip]: ").strip().lower()
+        prompt = ("    did this pickaxe really break? [y / n = it did not / s = skip]: "
+                  if event.get("provenance") == "pickaxe_break"
+                  else "    correct? [y / n = type the real items / s = skip]: ")
+        answer = input(prompt).strip().lower()
         if answer == "s":
             print()
             continue
         if answer in ("y", "yes", ""):
             store.put(ChestTruth(key=key, session=session, verdict=CONFIRMED,
                                  read_items=read_items, true_items=list(read_items),
+                                 verified_by=args.verified_by))
+        elif event.get("provenance") == "pickaxe_break":
+            # NOT ASKED TO TYPE ANYTHING. There is one claim here and it is either true or
+            # false, so "n" states the whole correction: nothing broke.
+            store.put(ChestTruth(key=key, session=session, verdict=CORRECTED,
+                                 read_items=read_items, true_items=[],
                                  verified_by=args.verified_by))
         else:
             # Separated by ';' rather than ',' because item names contain commas
@@ -999,6 +1217,9 @@ def cmd_verify(cfg: ClientConfig, args) -> int:
         store.save(_data_path(args, "verified.json"))
         print()
 
+    if agreed or differed:
+        print(f"against what was already confirmed: {agreed} match, {differed} differ"
+              + ("" if not differed else "   <- look at these") + "\n")
     print(json.dumps(store.accuracy(), indent=1))
     return 0
 
@@ -1193,8 +1414,14 @@ def main(argv=None) -> int:
             q.add_argument("--walk-shot", help="screenshot while walking (for the HUD template)")
             q.add_argument("--delay", type=float, default=4.0,
                            help="seconds to switch back to the game before each capture")
-            q.add_argument("--fonts", required=True,
-                           help="glob for the game's fonts, or an atlas.<locale>.json")
+            # NOT REQUIRED ANY MORE. The client renders from the atlas it built out of the
+            # player's own copy of the game, and making this mandatory meant every command
+            # line had to name a typeface — so the obvious thing to pass was the extracted
+            # `fonts\*.ttf`, which is NOT what the game draws with. See _font_candidates for
+            # what that measured: 0.547 and a failed self-check, against 0.823 for the atlas.
+            q.add_argument("--fonts", default=None,
+                           help="render with this font or atlas instead of the atlas this "
+                                "client built (a glob, or one atlas.<locale>.json)")
         else:
             q.add_argument("--dungeon", type=int, required=True)
             q.add_argument("--floor", type=int, default=None)
@@ -1235,7 +1462,11 @@ def main(argv=None) -> int:
                                    help="write the results to the spool (default: dry run)")
                 else:
                     q.add_argument("--again", action="store_true",
-                                   help="revisit chests that were already confirmed")
+                                   help="ask about every reading again, including the "
+                                        "ones already confirmed")
+                    q.add_argument("--differing", action="store_true",
+                                   help="ask again only where the client now reads "
+                                        "something OTHER than what you confirmed")
                     q.add_argument("--transcript", metavar="FILE",
                                    help="confirm from a written record instead of the "
                                         "prompt: lines of 'session#N: item xA, item'")

@@ -141,3 +141,28 @@ def test_a_slow_disk_costs_recorded_frames_never_sampled_ones(tmp_path, monkeypa
 
     assert runner.stats.get("record_dropped") == 1
     assert runner._recorded == 0, "a dropped frame must not be counted as recorded"
+
+
+def test_a_session_is_recorded_under_the_resolution_it_was_recorded_at():
+    """`capture/1920x1080/session-...`, not `capture/session-...`.
+
+    Everything about reading a frame is fitted per resolution — the band, the panel's box,
+    the letter spacing, the HUD template — so a folder of sessions at mixed sizes has to be
+    opened one session.json at a time before any question about a fault can even be asked.
+    The folder is named the way the calibration for it is, so the two cannot drift apart.
+    """
+    from wddrop_client.calibration import ProfileStore
+    from wddrop_client.__main__ import _session_record_dir
+
+    landscape = _session_record_dir("/tmp/capture", (1920, 1080))
+    assert landscape.parent.name == ProfileStore.key_for((1920, 1080)) == "1920x1080"
+    assert landscape.name.startswith("session-")
+
+    portrait = _session_record_dir("/tmp/capture", (704, 1241))
+    assert portrait.parent.name == "704x1241"
+    assert portrait.parent.parent == landscape.parent.parent
+
+    # No size given (nothing in the client does this, but the helper is called with one
+    # argument in tests and tools): the flat layout, exactly as before.
+    assert _session_record_dir("/tmp/capture").parent.name == "capture"
+    assert _session_record_dir(None) is None

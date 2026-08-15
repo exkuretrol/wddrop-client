@@ -12,6 +12,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "client"))
+# `__main__` imports the schema package; the verify module itself does not.
+sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
 from wddrop_client.verify import CONFIRMED, CORRECTED, ChestTruth, TruthStore  # noqa: E402
 
@@ -229,3 +231,138 @@ def test_accuracy_reports_sources_apart():
 def test_verified_by_defaults_to_player_for_older_records():
     """Confirmations recorded before the field existed were all made by the player."""
     assert ChestTruth(key="k", session="s", verdict=CONFIRMED).verified_by == "player"
+
+
+# -- a swing is not a chest, and two swings are not each other --------------------------
+
+def test_every_swing_of_a_session_has_its_own_key():
+    """The bug this replaces: mining events carried no chest index, so `chest_index_in_dive`
+    was None for all of them and they all answered to `<session>#None`. Confirming the first
+    swing of a session marked every other swing "already confirmed", and the rest of the
+    session was never checked — silently, and in the one tool whose whole job is checking."""
+    from wddrop_client.verify import TruthStore
+
+    swings = [
+        {"session_label": "session-20260814-185958", "provenance": "mining",
+         "dive": {"mining_index_in_dive": n, "elapsed_seconds": n * 5}}
+        for n in (1, 2, 3)
+    ]
+    keys = [TruthStore.key_for(e) for e in swings]
+    assert len(set(keys)) == 3, keys
+    assert keys[0].endswith("#mine1")
+
+
+def test_a_swing_and_a_chest_cannot_collide():
+    from wddrop_client.verify import TruthStore
+
+    label = "session-20260814-185958"
+    chest = {"session_label": label, "provenance": "chest_direct",
+             "dive": {"chest_index_in_dive": 1}}
+    swing = {"session_label": label, "provenance": "mining",
+             "dive": {"mining_index_in_dive": 1}}
+    assert TruthStore.key_for(chest) != TruthStore.key_for(swing)
+    # And a chest's key is UNCHANGED, so confirmations already on disk still match.
+    assert TruthStore.key_for(chest) == f"{label}#1"
+
+
+def test_a_swing_recorded_before_the_counter_falls_back_to_its_frame():
+    """Old spools have no `mining_index_in_dive`. Colliding them all onto one key is the bug;
+    the frame a swing was read from is unique within a recording and is what the reader would
+    be checked against anyway."""
+    from wddrop_client.verify import TruthStore
+
+    label = "session-20260814-185958"
+    old = [{"session_label": label, "provenance": "mining", "dive": {"elapsed_seconds": t},
+            "contents": [{"item_name": "下級鉄鉱石", "source_frame": f}]}
+           for t, f in ((51, "episode-022/f_00004.png"), (123, "episode-028/f_00004.png"))]
+    keys = [TruthStore.key_for(e) for e in old]
+    assert len(set(keys)) == 2, keys
+
+
+def test_a_pickaxe_break_is_a_reading_with_its_own_key():
+    """It is the reading with the most to lose from being wrong — a false one spends a
+    pickaxe the player still has and moves the swings-since-break figure the whole
+    pickaxe-lifetime number rests on — and `verify` could not see it at all."""
+    from wddrop_client.verify import TruthStore
+
+    label = "session-20260813-145742"
+    breaks = [{"session_label": label, "provenance": "pickaxe_break",
+               "dive": {"break_index_in_dive": n}} for n in (1, 2)]
+    keys = [TruthStore.key_for(e) for e in breaks]
+    assert keys == [f"{label}#break1", f"{label}#break2"]
+    # And it collides with neither a chest nor a swing at the same index.
+    assert keys[0] != TruthStore.key_for(
+        {"session_label": label, "dive": {"chest_index_in_dive": 1}})
+    assert keys[0] != TruthStore.key_for(
+        {"session_label": label, "provenance": "mining", "dive": {"mining_index_in_dive": 1}})
+
+
+# -- re-reading a confirmed session is how a change gets checked -------------------------
+
+def test_verify_shows_what_you_confirmed_next_to_what_it_reads_now():
+    """Only the current reading was printed, so a re-run after a change to the reader said
+    "already confirmed" over a DIFFERENT answer and compared nothing. A confirmed session is
+    the only ground truth this project has."""
+    from wddrop_client.__main__ import _against_what_was_confirmed
+    from wddrop_client.verify import CONFIRMED, ChestTruth
+
+    truth = ChestTruth(key="s#mine6", session="s", verdict=CONFIRMED,
+                       read_items=["上級鉄鉱石 x3"], true_items=["上級鉄鉱石 x3", "透明な小石 x3"],
+                       verified_by="tester")
+    same, lines = _against_what_was_confirmed(truth, ["上級鉄鉱石 x3", "透明な小石 x3"])
+    assert same
+    assert any("you confirmed" in ln and "上級鉄鉱石 x3" in ln for ln in lines)
+    assert any("tester" in ln for ln in lines)
+
+    differs, lines = _against_what_was_confirmed(truth, ["下級鉄鉱石 x3", "透明な小石 x3"])
+    assert not differs
+    assert any("DIFFERS" in ln and "下級鉄鉱石 x3" in ln for ln in lines), lines
+
+
+def test_an_empty_reading_is_shown_as_nothing_rather_than_as_a_blank():
+    """A chest that paid out nothing and a chest whose lines were all refused look identical
+    as an empty list, and the difference is the whole point of confirming one."""
+    from wddrop_client.__main__ import _against_what_was_confirmed
+    from wddrop_client.verify import CONFIRMED, ChestTruth
+
+    truth = ChestTruth(key="s#4", session="s", verdict=CONFIRMED, read_items=[],
+                       true_items=[], verified_by="tester")
+    same, lines = _against_what_was_confirmed(truth, [])
+    assert same and any("(nothing)" in ln for ln in lines)
+
+
+def test_re_answering_is_narrowed_to_what_changed_not_the_whole_session():
+    """The replay cannot be narrowed — every frame has to be read again to produce the
+    readings at all — but the QUESTIONS can, and a session is a dozen of them. Being asked
+    about thirteen agreements to reach the one disagreement is how a confirmed session stops
+    being re-checked at all.
+
+        (nothing)     confirmed entries are shown and not asked about
+        --differing   asked only where the client now reads something else
+        --again       asked about everything
+
+    Encoded as the decision itself, since it is a line of flags in a loop that is otherwise
+    only exercised by a recording.
+    """
+    def ask(*, again: bool, differing: bool, same: bool) -> bool:
+        return again or (differing and not same)
+
+    assert not ask(again=False, differing=False, same=True)
+    assert not ask(again=False, differing=False, same=False)
+    assert not ask(again=False, differing=True, same=True)
+    assert ask(again=False, differing=True, same=False), "the case worth a person's time"
+    assert ask(again=True, differing=False, same=True)
+    assert ask(again=True, differing=False, same=False)
+
+
+def test_the_flags_are_offered_on_verify():
+    """A flag nobody can find is a flag that does not exist. `verify --help` names both."""
+    import subprocess
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[1]
+    out = subprocess.run([_sys.executable, str(root / "wddrop.py"), "verify", "--help"],
+                         capture_output=True, text=True, timeout=120)
+    assert "--differing" in out.stdout, out.stdout[-400:]
+    assert "--again" in out.stdout

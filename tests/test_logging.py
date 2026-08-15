@@ -145,3 +145,54 @@ def test_the_flag_and_the_setting_both_turn_it_on(monkeypatch, tmp_path):
     cfg.save()
     cli.main(["whoami"])
     assert seen["trace"] is True, "the setting was ignored without the flag"
+
+
+def test_the_window_configures_the_LOG_FILE_at_startup_not_a_console():
+    """The exe never wrote a log line in its life, and this is why.
+
+    `build_exe`'s entry script calls `wddrop_client.ui.main` — not `__main__.main`, which is
+    where the file logging lives. `ui.main` called `logging.basicConfig`, which writes to a
+    console, and the build is `--windowed`: there is no console, and `sys.stderr` is None. So
+    every INFO and DEBUG line the client produced went nowhere at all.
+
+    The setting was half-wired for the same reason: `logs.configure` ran only when the trace
+    checkbox was TOGGLED, so a player who had turned trace on in an earlier session opened
+    the window with it ticked and still got nothing. That is exactly how it was reported —
+    "I checked the trace mode and it didn't record".
+
+    Checked on the source rather than by running Qt: the property is which call is in there,
+    and a headless Qt run would test the harness more than the client.
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from wddrop_client import ui
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(ui.main)))
+    fn = tree.body[0]
+    # The DOCSTRING is not the code, and it names both calls to explain the bug.
+    if (fn.body and isinstance(fn.body[0], ast.Expr)
+            and isinstance(fn.body[0].value, ast.Constant)):
+        fn.body = fn.body[1:]
+    src = ast.unparse(fn)
+    assert "logs.configure" in src, "the window's entry point does not set up file logging"
+    assert "basicConfig" not in src, "a console handler in a build that has no console"
+    assert "cfg.trace" in src or "getattr(cfg" in src, \
+        "the trace SETTING is not applied at startup, only when the box is toggled"
+
+
+def test_the_bundle_really_does_enter_through_the_window():
+    """The link the test above depends on. If the entry script ever calls `__main__.main`
+    instead, the reasoning changes and this should be looked at again."""
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root))
+    import build_exe
+
+    target = Path(__import__("tempfile").mkdtemp()) / "entry.py"
+    body = build_exe.entry_script(target).read_text(encoding="utf-8")
+    assert "ui.main()" in body
+    assert "wddrop_client.__main__" not in body

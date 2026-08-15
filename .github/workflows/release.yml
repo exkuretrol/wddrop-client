@@ -124,12 +124,21 @@ jobs:
           name: wddrop-exe
           path: dist/wddrop.exe
 
+      # THE RELEASE PAGE SAYS WHAT CHANGED, and says the same thing the changelog does.
+      # Taken from CHANGELOG.md rather than generated from the commit log: a generator can
+      # only reach what fits in a commit subject, and the line that matters to a player is
+      # the one saying which of their recordings a fix affects. Two descriptions of one
+      # release would also drift, and the poorer one would be the public one.
+      #
+      # It FAILS when the version has no section. A release page that quietly says nothing
+      # about itself is worse than a build that does not go out.
+      - name: Release notes, from the changelog
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: python build_exe.py --release-notes "${GITHUB_REF_NAME#v}" > NOTES.md
+
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: dist/wddrop.exe
-          body: |
-            Download `wddrop.exe` and run it. Nothing to install.
-
-            Play in the tall window (704 × 1241) — the only size that reads reliably today.
-            The client already has a calibration for it, so there is nothing to set up.
+          body_path: NOTES.md

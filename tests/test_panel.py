@@ -319,11 +319,19 @@ def test_a_tie_is_only_broken_when_the_winner_actually_fits():
 def _runner_for(profile, names, dungeon_names=None):
     from wddrop_client.runner import CaptureRunner
 
+    from wddrop_client.calibration import panel_columns, read_columns, ui_scale
+
     runner = CaptureRunner.__new__(CaptureRunner)
     runner.profile = profile
+    # Derived, not passed None: the columns are part of how the panel is read now, and a
+    # hand-built runner that skips them tests a reader the client no longer has.
+    runner.columns = read_columns(profile)
+    runner.panel_box = panel_columns(profile)
+    runner.ui_scale = ui_scale(profile.frame_size)
     runner._mining_names = names
     runner._mining_indexes = {}
     runner._mining_renderers = {}
+    runner._probe_renderers = {}
     runner._mining_renderer = None
     runner._panel_window = (520, 44)
     runner._panel_fit = (profile.panel_font_size, profile.panel_letter_spacing)
@@ -389,7 +397,8 @@ def test_warming_uses_the_geometry_the_profile_already_knows(_shipped_profile):
     runner = _runner_for(_shipped_profile, ["下級鐵礦石"])
     runner.warm_mining_index(7015)
     assert list(runner._mining_indexes) == [
-        (size, round(_shipped_profile.panel_letter_spacing, 2), runner._panel_window_for(size))]
+        runner._index_key(size, _shipped_profile.panel_letter_spacing,
+                          runner._panel_window_for(size))]
 
 
 def test_the_warm_index_is_the_one_the_fit_asks_for(_shipped_profile):
@@ -439,10 +448,16 @@ def _ja_runner(names, panel_fit, band_spacing=1.1, size=25):
         frame_size=(704, 1241), message_band=(999, 1020), font_path=str(JA_ATLAS),
         font_size=size, offset=(-2, 1), calibration_score=0.91, letter_spacing=band_spacing,
         window=(976, 51), text_x0=93, locale="ja")
+    from wddrop_client.calibration import panel_columns, read_columns, ui_scale
+
     runner = CaptureRunner.__new__(CaptureRunner)
     runner.profile = profile
+    runner.columns = read_columns(profile)
+    runner.panel_box = panel_columns(profile)
+    runner.ui_scale = ui_scale(profile.frame_size)
     runner._mining_names = list(names)
     runner._mining_indexes, runner._mining_renderers, runner._mining_renderer = {}, {}, None
+    runner._probe_renderers = {}
     runner._panel_window = (520, 44)
     runner._panel_fit = panel_fit
     runner._spacing_fitted = False
@@ -585,3 +600,113 @@ def test_the_long_name_reads_on_the_real_frame():
     inherited = read(1.1)
     assert inherited.best == "ウロボロス鉱石" and not inherited.accepted, (
         "the band's spacing no longer reproduces the failure this test is about")
+
+
+# -- opening a chest must not cost an index build ----------------------------------------
+#
+# 「だれが開ける？」 — the chest's own "who opens it?" prompt — is one centred line, in the
+# panel's search band, at a plausible line height. The fit therefore ran on it, and the fit
+# builds an index over ~2,150 names per (face, size) it tries: SIX builds, ~1.2s each.
+#
+# Measured in session-20260814-181205: the capture loop froze for NINE SECONDS starting on
+# the frame the player pressed Open — f_00014 at 02:12:09, f_00015 at 02:12:18 — and 136
+# index builds across that one session. The chest's drop lines were never sampled, because
+# nothing was sampled. Reported as "NOT RECORDING when I open the first chest".
+#
+# The panel says what it is: every yield line ends in 「 を入手した」. Finding that needs one
+# renderer and one slide, and no vocabulary at all.
+
+def test_a_row_without_the_panels_wording_costs_no_index_build():
+    from wddrop_client.runner import CaptureRunner
+
+    if not JA_ATLAS.exists():
+        pytest.skip("atlas not built")
+    runner = _ja_runner(["下級鉄鉱石", "透明な小石"], None, band_spacing=0.0, size=22)
+    runner.profile.frame_size = (1920, 1080)
+
+    import numpy as np
+
+    from wddrop_client.calibration import panel_columns, ui_scale
+    from wddrop_client.capture.glyph import make_renderer
+
+    runner.panel_box = panel_columns(runner.profile)
+    runner.ui_scale = ui_scale(runner.profile.frame_size)
+
+    # A frame carrying one centred line that is NOT a yield line, drawn in the game's own
+    # face so this is a fair test rather than a test of noise.
+    prompt = make_renderer(str(JA_ATLAS), 22, (520, 44), 0.0).render("だれが開ける？")
+    frame = np.zeros((1080, 1920), dtype=float)
+    row = (637, 637 + 21)
+    frame[row[0] - 3:row[0] - 3 + prompt.shape[0], 830:830 + prompt.shape[1]] = prompt
+
+    built = []
+    original = runner._mining_index
+
+    def counting(size, window=None, spacing=None):
+        built.append(size)
+        return original(size, window, spacing)
+
+    runner._mining_index = counting
+    assert runner._fit_panel(frame, row, 22) is None
+    assert built == [], f"the chest prompt built {len(built)} index(es): {built}"
+
+
+def test_the_shortlist_points_at_the_size_the_panel_is_actually_drawn_at():
+    """The wording is five characters and its slide score is sharp about size — sharp enough
+    to choose the geometry, so a real panel costs ONE build rather than six."""
+    from wddrop_client.capture.glyph import make_renderer
+
+    if not JA_ATLAS.exists():
+        pytest.skip("atlas not built")
+    import numpy as np
+
+    from wddrop_client.calibration import panel_columns
+
+    runner = _ja_runner(["下級鉄鉱石"], None, band_spacing=0.0, size=22)
+    runner.profile.frame_size = (1920, 1080)
+    runner.panel_box = panel_columns(runner.profile)
+
+    line = make_renderer(str(JA_ATLAS), 22, (520, 44), 0.0).render("下級鉄鉱石×3 を入手した")
+    frame = np.zeros((1080, 1920), dtype=float)
+    row = (512, 512 + 21)
+    frame[row[0] - 3:row[0] - 3 + line.shape[0], 830:830 + line.shape[1]] = line
+
+    shortlist = runner._yield_line_geometries(frame, row, [22, 21, 23])
+    assert shortlist, "the panel's own wording was not found in a panel line"
+    assert shortlist[0][2] == 22, [(round(s, 3), Path(f).name, z) for s, f, z in shortlist]
+
+
+def test_a_break_is_kept_where_verify_can_find_it():
+    """`on_pickaxe` is a callback for the window's counter; it leaves nothing behind. The
+    reading itself — which pickaxe, when, and off which frame — is kept on the runner, so a
+    tool that replays a recording can show it and ask whether it really happened.
+
+    Deliberately NOT on `on_event`: that stream is the spool, and the wire has no provenance
+    for a break. Sending one would be a schema change made by accident.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from wddrop_client.capture.pickaxe import BROKE
+    from wddrop_client.runner import CaptureRunner
+
+    runner = CaptureRunner.__new__(CaptureRunner)
+    runner.stats = {}
+    runner.pickaxes_left = 3
+    runner.pickaxes = None
+    runner.on_pickaxe = None
+    runner.pickaxe_events = []
+    runner._break_index = 0
+    runner._frame_src = "/somewhere/episode-016/f_00025.png"
+    runner._dungeon_id = 7015
+    start = datetime(2026, 8, 13, 14, 57, tzinfo=timezone.utc)
+    runner.tracker = type("T", (), {"started_at": start})()
+
+    runner._on_pickaxe_event((BROKE, "北穿の金のつるはし"), start + timedelta(seconds=6))
+    assert runner.pickaxes_left == 2, "a break still spends a pickaxe"
+    assert len(runner.pickaxe_events) == 1
+    kept = runner.pickaxe_events[0]
+    assert kept["provenance"] == "pickaxe_break"
+    assert kept["dive"]["break_index_in_dive"] == 1
+    assert kept["dive"]["elapsed_seconds"] == 6
+    assert kept["contents"][0]["item_name"] == "北穿の金のつるはし"
+    assert kept["contents"][0]["source_frame"] == "episode-016/f_00025.png"

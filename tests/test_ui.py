@@ -442,23 +442,44 @@ def test_no_dungeon_shows_its_id(app, home, tmp_path):
 
 
 def test_the_pickaxe_controls_appear_only_where_there_is_something_to_mine(app, home, tmp_path):
-    """Veins exist in one dungeon; everywhere else the panel reader is off entirely. A
-    pickaxe count elsewhere is a control that cannot do anything, beside a button that would
-    record a break that could not have happened."""
+    """Veins exist in one dungeon; everywhere else the panel reader is off entirely, so a
+    pickaxe count there is a control that cannot do anything.
+
+    THE "A PICKAXE BROKE" BUTTON IS GONE, and this test is where that shows. It existed
+    because the break message could not be read; it can, at every shipped size — five breaks
+    at 704x1241, four at 1920x1080 and four at 1600x900, each confirmed against the player's
+    own answers. A button that duplicates a reading is a second source of truth for the
+    number every mining rate divides by, and the one a player can press twice.
+    """
     from wddrop_client.ui import MainWindow
 
     window = MainWindow(make_config(accepted=True), data=home)
     window.show()
     window._load_catalog(_catalogue(tmp_path))
 
+    assert not hasattr(window, "broke"), "the manual break button is back"
+
     window.dungeon.setCurrentIndex(window.dungeon.findText("初始的奈落"))
     app.processEvents()
-    assert not window.pickaxes.isVisible() and not window.broke.isVisible()
+    assert not window.pickaxes.isVisible()
 
     window.dungeon.setCurrentIndex(window.dungeon.findText("北穿幽靈城"))
     app.processEvents()
-    assert window.pickaxes.isVisible() and window.broke.isVisible()
+    assert window.pickaxes.isVisible()
     assert window.pickaxe_caption.isVisible()
+
+
+def test_every_button_says_what_it_does(app, home):
+    """A tooltip on each, because the labels are two words and the consequences are not:
+    Upload sends data off this computer, Calibrate changes how every future frame is read.
+    """
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window.show()
+    missing = [b.text() for b in window.findChildren(QtWidgets.QPushButton)
+               if b.text() and not b.toolTip()]
+    assert not missing, f"buttons with no tooltip: {missing}"
 
 
 def test_the_pickaxe_count_is_on_the_page_it_is_used_on(app, home):
@@ -1161,3 +1182,16 @@ def test_the_data_count_is_over_what_the_client_needs(app, home, monkeypatch):
     window._refresh_setup()
     assert "2" in window.data_label.text()
     assert "3" not in window.data_label.text(), window.data_label.text()
+
+
+def test_the_window_says_somewhere_that_it_is_not_the_game_makers(app, home):
+    """It used to sit in the ribbon beside the game's name, on every screen. Moved to
+    Settings it is stated once, on the page a player opens to find out what this program is
+    — but it is still stated, and that is what this test is for: the claim is the kind that
+    disappears quietly in a layout change and is noticed by nobody until it matters."""
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    settings = window.pages.widget(3)
+    said = " ".join(label.text() for label in settings.findChildren(QtWidgets.QLabel))
+    assert "not made by" in said and "connected to the makers" in said

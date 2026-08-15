@@ -64,18 +64,30 @@ MAX_LINES = 8
 INK_LEVEL = 150
 
 
-def panel_rows(gray) -> list[tuple[int, int]]:
+def _columns(arr, columns):
+    """(left, right) to read between, defaulting to the whole width."""
+    return columns if columns else (0, arr.shape[1])
+
+
+def panel_rows(gray, columns: tuple[int, int] | None = None) -> list[tuple[int, int]]:
     """Text rows of the result panel, as (top, bottom) pairs, or [] when there is no panel.
 
     `gray` is the whole frame. Returns rows in screen order, so the caller reads them the way
     the player does.
+
+    `columns` is the horizontal span the game writes in — `calibration.read_columns`. Without
+    it every column counts, and MIN_ROW_INK is then a bar that the scenery clears on its own:
+    at 1920x1080 rock highlights merged with the panel's rows into blocks taller than a line,
+    which `MIN_LINE_H..MAX_LINE_H` then dropped. Rows vanished from panels that were plainly
+    on screen, which is what "some rows of the mining result are not detected" was.
     """
     import numpy as np
 
     arr = np.asarray(gray, dtype=float)
     h = arr.shape[0]
+    left, right = _columns(arr, columns)
     top_y, bottom_y = int(h * SEARCH_TOP), int(h * SEARCH_BOTTOM)
-    lit = (arr[top_y:bottom_y] > INK_LEVEL).sum(axis=1)
+    lit = (arr[top_y:bottom_y, left:right] > INK_LEVEL).sum(axis=1)
 
     rows: list[tuple[int, int]] = []
     start = last = None
@@ -134,7 +146,7 @@ def size_from_rows(rows) -> int | None:
 SAME_TEXT = 0.80
 
 
-def panel_signature(gray, rows=None):
+def panel_signature(gray, rows=None, columns: tuple[int, int] | None = None):
     """What the panel currently shows, as a comparable ink mask.
 
     Taken over the whole panel SEARCH BAND, not over the detected rows: the row boundaries
@@ -150,7 +162,8 @@ def panel_signature(gray, rows=None):
 
     arr = np.asarray(gray, dtype=float)
     h = arr.shape[0]
-    band = arr[int(h * SEARCH_TOP):int(h * SEARCH_BOTTOM)]
+    left, right = _columns(arr, columns)
+    band = arr[int(h * SEARCH_TOP):int(h * SEARCH_BOTTOM), left:right]
     return (band > INK_LEVEL)[::2, ::2]
 
 
@@ -179,26 +192,60 @@ def same_text(a, b, threshold: float = SAME_TEXT) -> bool:
 # session containing no mining at all. A player who dismisses the panel quickly is no longer
 # punished — the marker is there on the first frame the panel is done, where the settle test
 # needed a second frame to compare against.
-ARROW_SEARCH_BELOW = 140          # px under the last text row
-ARROW_FROM_WIDTH = 0.85           # the marker sits at the right edge of the panel
-ARROW_MIN_INK, ARROW_MAX_INK = 90, 160
-ARROW_MIN_SIDE, ARROW_MAX_SIDE = 12, 20
+# EVERY NUMBER HERE IS IN CANVAS UNITS, and the caller scales them. The game's UI is one
+# fixed layout scaled by min(width/1080, height/1920) — read out of the CanvasScaler in the
+# Steam build, see calibration.UI_REFERENCE — so a constant in PIXELS is a constant that is
+# only true at the resolution it was measured at. Both were, and it cost both faults that a
+# 1920x1080 recording came back with:
+#
+#                          704x1241 (scale .646)   1920x1080 (scale .563)   units
+#     marker box              15 x 16 px               13 x 15 px            ~23
+#     marker ink                 115 px                    94 px            ~280
+#     below the last row          90 px                    77 px            ~140
+#
+# The old constants were the 704 pixels. The search also started at 0.85 of the FRAME width,
+# which is x598 there — the panel's right edge is x611, so it worked — and x1632 at 1080,
+# where the panel ends at x1281. The marker was never found, so every panel had to settle by
+# similarity instead, and a swing dismissed inside two frames never does.
+ARROW_SEARCH_BELOW_UNITS = 217.0        # under the last text row
+ARROW_FROM_RIGHT_UNITS = 260.0          # the marker centre sits ~104 units inside the edge
+ARROW_MIN_INK_UNITS, ARROW_MAX_INK_UNITS = 215.0, 385.0     # square units, so scale²
+ARROW_MIN_SIDE_UNITS, ARROW_MAX_SIDE_UNITS = 18.0, 31.0
+# Fallback for a caller with no profile to scale by: the frame's own proportions. Only ever
+# right at the resolution it was measured at, which is why nothing in the client uses it.
+ARROW_FROM_WIDTH = 0.85
+ARROW_SEARCH_BELOW = 140
 
 
-def advance_marker(gray, rows) -> bool:
-    """Whether the ▼ is showing, i.e. the panel has finished drawing."""
+def advance_marker(gray, rows, columns: tuple[int, int] | None = None,
+                   scale: float | None = None) -> bool:
+    """Whether the ▼ is showing, i.e. the panel has finished drawing.
+
+    `columns` is the PANEL's box (calibration.panel_columns), not the message band's, and
+    `scale` is calibration.ui_scale for this screen. Given neither, the old frame-relative
+    numbers are used, which are correct at 704x1241 and nowhere else.
+    """
     import numpy as np
 
     if not rows:
         return False
     arr = np.asarray(gray, dtype=float)
-    width = arr.shape[1]
-    below = arr[rows[-1][1]:rows[-1][1] + ARROW_SEARCH_BELOW, int(width * ARROW_FROM_WIDTH):]
+    if columns and scale:
+        _left, right = columns
+        start = int(right - ARROW_FROM_RIGHT_UNITS * scale)
+        below_px = int(ARROW_SEARCH_BELOW_UNITS * scale)
+        min_ink, max_ink = ARROW_MIN_INK_UNITS * scale ** 2, ARROW_MAX_INK_UNITS * scale ** 2
+        min_side, max_side = ARROW_MIN_SIDE_UNITS * scale, ARROW_MAX_SIDE_UNITS * scale
+    else:
+        start, right = int(arr.shape[1] * ARROW_FROM_WIDTH), arr.shape[1]
+        below_px = ARROW_SEARCH_BELOW
+        min_ink, max_ink, min_side, max_side = 90, 160, 12, 20
+    below = arr[rows[-1][1]:rows[-1][1] + below_px, max(0, start):right]
     mask = below > INK_LEVEL
     ink = int(mask.sum())
-    if not (ARROW_MIN_INK <= ink <= ARROW_MAX_INK):
+    if not (min_ink <= ink <= max_ink):
         return False
     ys, xs = np.where(mask)
     w = int(xs.max() - xs.min() + 1)
     h = int(ys.max() - ys.min() + 1)
-    return (ARROW_MIN_SIDE <= w <= ARROW_MAX_SIDE) and (ARROW_MIN_SIDE <= h <= ARROW_MAX_SIDE)
+    return (min_side <= w <= max_side) and (min_side <= h <= max_side)

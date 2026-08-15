@@ -223,8 +223,9 @@ def test_the_dialog_cannot_be_closed_while_it_is_reading(tmp_path):
     being read, and closing deletes a widget a worker thread is about to signal — which
     crashes later, after the dialog is gone, where nothing connects it to calibration.
 
-    The name box stays live on purpose: the vocabulary is offered as soon as it loads so the
-    player can start picking while the proposal is still being worked out.
+    The NAME BOX is locked with them, and was not: it is filled in by the reader when it
+    finishes, so a player typing meanwhile either has their answer kept without knowing why
+    the box stopped accepting, or loses it to the proposal.
     """
     pytest.importorskip("PySide6.QtWidgets", reason="Qt not installed")
     from types import SimpleNamespace
@@ -238,17 +239,22 @@ def test_the_dialog_cannot_be_closed_while_it_is_reading(tmp_path):
 
     dialog = CalibrateDialog.__new__(CalibrateDialog)
     dialog.action, dialog.skip = widget("action"), widget("skip")
+    dialog.load = widget("load")
+    dialog.name = SimpleNamespace(
+        setEnabled=lambda v: enabled.__setitem__("name", v),
+        isVisible=lambda: True, setFocus=lambda: enabled.__setitem__("focus", True))
     dialog._working = False
 
     CalibrateDialog._busy(dialog, True)
-    assert enabled == {"action": False, "skip": False}
+    assert enabled == {"action": False, "skip": False, "load": False, "name": False}
 
     ignored = []
     CalibrateDialog.closeEvent(dialog, SimpleNamespace(ignore=lambda: ignored.append(1)))
     assert ignored, "the window closed while a thread was still using it"
 
     CalibrateDialog._busy(dialog, False)
-    assert enabled == {"action": True, "skip": True}
+    assert enabled == {"action": True, "skip": True, "load": True, "name": True,
+                       "focus": True}
 
 
 def test_calibration_is_a_development_feature(tmp_path, monkeypatch):

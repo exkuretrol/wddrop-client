@@ -84,7 +84,25 @@ PANEL_ROW_IS_TEXT = 0.40
 #
 # Radius 2 rather than 1 because the row's top edge moves with whichever glyph in the line
 # happens to be tallest, which is a property of the item's name and not of the client.
-PANEL_SHIFTS = (range(-2, 3), range(-2, 3))
+# ALIGNMENT SEARCH FOR A PANEL ROW, AND IT IS NOT SYMMETRIC.
+#
+# The band has a calibrated origin. A panel row does not: `anchor_window` takes it from the
+# first lit column, and `_text_left` then walks back over columns too thin to count — so the
+# anchor lands somewhere between the PEN and the first glyph's ink, and WHERE depends on how
+# bright the text is. Measured on the same line, 「下級鉄鉱石×3 を入手した」, at both fitted
+# resolutions:
+#
+#      704x1241   true alignment dx +2   (inside a +-2 search: this always worked)
+#     1920x1080   true alignment dx -5   (outside it: 下級 scored 0.54, and 上級/中級 — whose
+#                                         first glyph has almost no bearing — won at 0.85)
+#
+# At their own alignment the true name wins at both, 0.8951 and 0.8929. So the search covers
+# the bearing rather than any rule pretending to know where the anchor fell: 下 opens with a
+# thin horizontal stroke worth ~9px of bearing, and the widest glyph bearings in this font are
+# about that. Sliding the TEMPLATES to their own ink was tried instead and is worse — it fixes
+# 1920x1080 by construction and breaks 704x1241 by the same construction, because the two
+# anchors differ by exactly the amount it assumes.
+PANEL_SHIFTS = (range(-8, 5), range(-2, 3))
 # Letter spacings the panel is fitted over, ABSOLUTE — see _fit_spacing for why an offset
 # from the band's spacing could not reach the right answer. The same steps `glyph.calibrate`
 # fits the message band over, so the two cannot disagree about what is a plausible value.
@@ -108,6 +126,31 @@ PANEL_SPACINGS = tuple(i / 10 for i in range(-6, 21))
 # a refusal does. If it is not one of those either it is counted unread — an honest gap, not
 # an invented item.
 PANEL_MAX_INK_EXCESS_PX = 12
+# How many geometries the panel fit may BUILD AN INDEX for, once the row has been shown to be
+# a yield line at all. Each build is ~1.2s over 2,153 names; two covers a genuine near-tie
+# between neighbouring sizes and nothing covers junk, because junk never gets this far.
+PANEL_FIT_TRIES = 2
+
+# THE BAND'S LETTER SPACING IS FITTED ON ONE LINE, AND ITS ERROR IS PER CHARACTER.
+#
+# Calibration fits the spacing against whatever name the player's drop shot happened to show.
+# A short one cannot measure it: the error accumulates along the line, so six characters hide
+# what seventeen expose. Measured on a real 1920x1080 fit whose own self-check scored 0.9241
+# on 「100バイン紙幣」 (6 characters), reading 「北穿の幽霊城の常なる冥刻のガラクタ」 (17):
+#
+#     the calibrated +0.7    0.7026, margin 0.0159 over its own family — refused
+#     +0.5                   0.8613, margin 0.0598                     — read
+#
+# That chest was recorded one item short. So a line that the first pass refuses is re-scored
+# at neighbouring spacings, over the shortlist only — a handful of renders, and only on a
+# refusal. The radius is what a fit can plausibly be out by; the step is `glyph.calibrate`'s
+# own, so the two cannot disagree about what a plausible value is.
+BAND_SPACING_RADIUS = 0.4
+BAND_SPACING_MIN_GAIN = 0.03
+# How many lines have to agree before the measurement is written into the profile. One line
+# is a reading; two is the spacing. Until then the refit is per-line and costs nothing that
+# is not already refused.
+BAND_SPACING_VOTES = 2
 # Veins exist in ONE dungeon: 北穿幽靈城 (7015). Everything about mining agrees -- the
 # pickaxes are 北穿的十字鎬, and every recorded panel came from there.
 #
@@ -121,9 +164,20 @@ PANEL_MAX_INK_EXCESS_PX = 12
 # and the contents disagree, which is the same mistake seen from the other side.
 MINING_DUNGEON_IDS = (7015,)
 # The pickaxe index holds three candidates, so the ordinary gates are far too easy to clear
-# by accident. A real break message reads at 0.9+; two stray rows cleared the default gates
-# in a session containing no mining whatsoever.
-PICKAXE_MIN_SCORE = 0.90
+# by accident. Both gates are kept, and the MARGIN is the one doing the work.
+#
+# 0.90 was the score a real break reached at 704x1241. It is not reachable at 1920x1080: the
+# same message is drawn 13% smaller there, and the best any geometry can do — swept over both
+# faces, four sizes and six spacings — is 0.894. Measured on the recording of 2026-08-14,
+# after the anchoring fix that this same reader needed:
+#
+#     a real break, three panels     0.866  0.894  0.894    margins 0.34  0.36  0.37
+#     the other rows of those panels 0.247  0.254            margins 0.002 0.008
+#     704x1241, a real break         0.907                   margin  0.31
+#
+# So the populations are half a point apart in score and two orders of magnitude apart in
+# margin. 0.85 sits in the gap rather than on top of the true readings.
+PICKAXE_MIN_SCORE = 0.85
 PICKAXE_MIN_MARGIN = 0.10
 
 # Automatic break detection, OFF — and now measured on both halves of the question rather
@@ -275,6 +329,11 @@ class CaptureRunner:
         self._mining_indexes: dict[int, object] = {}
         self._pickaxe_indexes: dict[int, object] = {}
         self._mining_renderers: dict[int, object] = {}
+        # Renderers used ONLY to ask whether a row is a yield line — see _yield_line_geometries.
+        self._probe_renderers: dict[tuple, object] = {}
+        # The band's second look at spacing — see _reread_at_other_spacings.
+        self._spacing_renderers: dict[float, object] = {}
+        self._spacing_votes: dict[float, int] = {}
         self._mining_renderer = None
         # (size, spacing) of the panel, LOCKED once a confident read happens. See _fit_panel.
         self._panel_fit: tuple[int, float] | None = None
@@ -291,6 +350,15 @@ class CaptureRunner:
         if all(v is not None for v in stored):
             if getattr(profile, "panel_data_version", None) == data_version:
                 self._panel_fit = (int(stored[0]), float(stored[1]))
+                # The FACE as well, when the profile carries one. It is fitted like the size
+                # and the spacing because it is the same kind of fact — see _panel_faces.
+                # RESOLVED, not tested for existence: a shipped profile names the file and
+                # not the folder it was fitted in, and taking the path literally means every
+                # player who did not fit it themselves reads the panel in the band's face.
+                face = profile.resolve_panel_font(
+                    Path(profile_path).parent if profile_path else None)
+                if face:
+                    self._render_source = face
                 log.info("wddrop: panel geometry from the profile: %dpx spacing %+.1f",
                          *self._panel_fit)
             else:
@@ -372,6 +440,14 @@ class CaptureRunner:
         # one-character rival 中/重 sat 0.023 behind.
         self.review_queue = review_queue
         self.profile = profile
+        # The columns the game writes in — TWO boxes, because the game draws two. The message
+        # band's is measured on this machine (`text_x0`); the mining panel's is the game's own
+        # layout scaled to this screen. Read once: neither changes under a run.
+        from .calibration import panel_columns, read_columns, ui_scale
+
+        self.columns = read_columns(profile)
+        self.panel_box = panel_columns(profile)
+        self.ui_scale = ui_scale(profile.frame_size) if getattr(profile, "frame_size", None) else None
         self.recognizer = recognizer
         self.hud = hud_detector
         self.tracker = tracker
@@ -389,6 +465,15 @@ class CaptureRunner:
         # Recognition is by far the most expensive step (~230ms over 3,381 candidates), and a
         # message line persists for MANY frames. Caching on the band's content collapses that
         # to once per distinct line instead of once per frame.
+        # Offset of the most recent frame consumed, so the moment a session STOPS is known.
+        self._last_t = 0.0
+        # Breaks, kept for `verify` — see _on_pickaxe_event.
+        self.pickaxe_events: list[dict] = []
+        self._break_index = 0
+        # Swings, counted so that two of them can be told apart. See _emit_mining.
+        # NOT `_mining_index` — that name is the method that builds the panel's index, and an
+        # attribute of the same name shadows it into 'int object is not callable'.
+        self._swing_index = 0
         self._last_band_key: bytes | None = None
         self._last_text: str = ""
         self._recognised_key: bytes | None = None
@@ -450,7 +535,13 @@ class CaptureRunner:
             # Ctrl-C is the normal way to end a session, and it used to propagate straight
             # out of here -- so stop_session never ran and a chest still in progress was
             # abandoned without a trace.
-            self.tracker.stop_session(self._clock(start, 0))
+            # THE LAST FRAME'S TIME, not the session's start. A chest still open when the
+            # player presses Stop is emitted as truncated — that part was right — but it was
+            # stamped with `start + 0s`, so the last chest of a session was recorded at
+            # 00:00, before every chest that preceded it, with an occurred_at equal to the
+            # dive's own start. Reported as "the last chest says 00:00 when you stop while it
+            # is still being read", which is exactly what it is.
+            self.tracker.stop_session(self._clock(start, getattr(self, "_last_t", 0.0)))
             # Before the counts are read: frames still queued have not been written yet, and
             # a session that reports 4,000 recorded frames must have 4,000 on disk.
             self._stop_writer()
@@ -469,6 +560,8 @@ class CaptureRunner:
                 checked_size = True
                 self._check_frame_size(frame.image.size)
             now = self._clock(start, frame.t)
+            # When the session ends, THIS is when it ended. See stop_session below.
+            self._last_t = frame.t
             gray = frame.image.convert("L")
             self._frame_src = frame.source
 
@@ -534,7 +627,7 @@ class CaptureRunner:
         from .capture.panel import (advance_marker, panel_rows, panel_signature,
                                     same_text, size_from_rows)
 
-        rows = panel_rows(gray)
+        rows = panel_rows(gray, self.panel_box)
         size = size_from_rows(rows)
         band = getattr(self.profile, "font_size", 26)
         # "No panel" must mean no PLAUSIBLE panel: a battle button or a chest highlight lights
@@ -544,7 +637,7 @@ class CaptureRunner:
             self._panel_key = None
             self._panel_emitted = False
             return
-        sig = panel_signature(gray, rows)
+        sig = panel_signature(gray, rows, self.panel_box)
         # THE ▼ IS THE GAME SAYING THE PANEL IS FINISHED, so it beats inferring completeness
         # from pixels settling: it is there on the FIRST frame the panel is done, where the
         # settle test needs a second frame to compare against. That is precisely the gap a
@@ -554,7 +647,8 @@ class CaptureRunner:
         # Similarity stays as the fallback for anything the marker constants do not fit
         # (another resolution, another locale's panel), so nothing regresses to worse than
         # before if the arrow is not found.
-        settled = advance_marker(gray, rows) or same_text(sig, self._panel_key)
+        settled = (advance_marker(gray, rows, self.panel_box, self.ui_scale)
+                   or same_text(sig, self._panel_key))
         self._panel_key = sig
         # ONE read per appearance, decided by presence rather than by content. Two successive
         # swings can differ only in a digit — measured 0.960 mask overlap between 「×6」 and
@@ -576,19 +670,34 @@ class CaptureRunner:
         probe = rows[heights[len(heights) // 2][1]]
         best = self._fit_panel(gray, probe, size)
         if best is None:
+            # NO YIELD LINE HERE — but a panel that says only 「…が壊れてしまった」 has none
+            # either, and it is still a panel. The item fit needs the panel's own wording to
+            # know it is looking at one (see _yield_line_geometries); the break pass has its
+            # own three candidates and does not, so it is asked directly rather than left
+            # behind a gate that was built for something else. Costs three tiny index builds
+            # once per size, against ~1.2s apiece for the item index.
+            if self._panel_fit is None:
+                for row in rows:
+                    if self._pickaxe_row(gray, row, size):
+                        self._panel_emitted = True
+                        break
             return
         _score, size, spacing, window, recognizer = best[:5]
         # The tie-breaker renders its own candidates, so it must use the renderer for the
         # size that WON -- the sweep above leaves the last one tried selected otherwise, and
         # the shapes then disagree.
-        self._mining_renderer = self._mining_renderers[(size, round(spacing, 2),
-                                                        tuple(window))]
+        self._mining_renderer = self._mining_renderers[self._index_key(size, spacing, window)]
         # Cut the pixels AFTER the size is settled but BEFORE anything slow: building an index
         # for a size not seen before takes seconds over ~3,400 candidates, and the panel can
         # be dismissed while it runs.
         # Paired with their rows: the pickaxe pass reports by row index, and a row that
         # cannot be cut must not shift the rest along.
-        cut = [(row, anchor_window(gray, row, window)) for row in rows]
+        # EVERY PANEL ROW IS ANCHORED INSIDE THE PANEL'S OWN BOX. Anchoring on the row's
+        # ink across the whole frame takes the origin from whatever the dungeon has lit at
+        # that height, and at 1920x1080 that is most rows: three swings in one recorded
+        # session came back with the ore line missing and only 透明な小石 recorded.
+        cut = [(row, anchor_window(gray, row, window, columns=self.panel_box))
+               for row in rows]
         crops = [(row, w) for row, w in cut if w is not None]
         # AUTOMATIC BREAK DETECTION IS OFF, and this is why. 「北穿的黃金十字鎬壞掉了」 does
         # appear in the panel and is read correctly -- but a three-candidate index has almost
@@ -623,7 +732,7 @@ class CaptureRunner:
                 # Refused here, which hands it to the pickaxe pass below like any other
                 # refusal. See PANEL_MAX_INK_EXCESS_PX.
                 name = None
-            if name is None and self._pickaxe_row(gray, row, size):
+            if name is None and self._pickaxe_row(gray, row, size, now):
                 # A pickaxe message, not an item line. Tried only where the item index
                 # REFUSED: a row that reads as an item is not one of these, and sweeping
                 # every row of every frame cost tens of thousands of comparisons for the
@@ -691,7 +800,7 @@ class CaptureRunner:
 
         def attempt(candidate_size: int, spacing: float):
             window = self._panel_window_for(candidate_size)
-            crop = anchor_window(gray, probe, window)
+            crop = anchor_window(gray, probe, window, columns=self.panel_box)
             index = self._mining_index(candidate_size, window, spacing)
             if crop is None or index is None:
                 return None
@@ -700,23 +809,35 @@ class CaptureRunner:
             # one it is used to answer: on a real Japanese panel the unmasked sweep chose
             # 23px/+1.3 (0.597) where the masked one chooses 25px/+0.0 (0.866).
             named, _cut = self._name_only(
-                crop, self._mining_renderers.get((candidate_size, round(spacing, 2),
-                                                  tuple(window))), self._mining_after())
+                crop, self._mining_renderers.get(
+                    self._index_key(candidate_size, spacing, window)), self._mining_after())
             match = index.recognize(named)
             return (match.score, candidate_size, spacing, window, index, match.best, crop)
 
-        if self._panel_fit is not None:
+        if self._panel_fit is not None and getattr(self.profile, "panel_font_path", None):
             # A STORED FIT IS STILL CHECKED ONCE, and this is not belt-and-braces: the fit
             # that shipped for 704x1241 was the message band's spacing written into the
             # panel's slot, never measured as a panel fit, and trusting it forever is what
             # made it survive. See _fit_spacing for what it cost.
             best = attempt(*self._panel_fit)
         else:
-            best = None
-            for candidate in (size, size - 1, size + 1):
-                got = attempt(candidate, band_spacing)
+            # A fit made before the face was fitted names a size and a spacing but not the
+            # typeface they were measured in, so the sizes are kept and the faces are swept:
+            # the stored numbers are the right ones, in a face that may not be.
+            sizes = ([self._panel_fit[0]] if self._panel_fit else [size, size - 1, size + 1])
+            spacing = self._panel_fit[1] if self._panel_fit else band_spacing
+            # NOTHING IS BUILT UNTIL THE ROW IS KNOWN TO BE A YIELD LINE, and then at most
+            # PANEL_FIT_TRIES geometries are. See _yield_line_geometries.
+            shortlist = self._yield_line_geometries(gray, probe, sizes)
+            best, winning_face = None, self._render_source
+            for _score, face, candidate in shortlist[:PANEL_FIT_TRIES]:
+                self._render_source = face
+                got = attempt(candidate, spacing)
                 if got and (best is None or got[0] > best[0]):
-                    best = got
+                    best, winning_face = got, face
+            # Whatever the sweep settled on, including when it settled on nothing: the
+            # spacing fit and every index built after this render from it.
+            self._render_source = winning_face
         if best is None:
             return None
         best = self._fit_spacing(best, attempt) or best
@@ -727,6 +848,91 @@ class CaptureRunner:
             self._keep_only_the_fit()
             self._remember_panel_fit()
         return best
+
+    def _yield_line_geometries(self, gray, probe, sizes):
+        """(score, face, size) whose rendering finds THE PANEL'S OWN WORDING in this row.
+
+        WHY THIS EXISTS: an index over 2,153 names takes ~1.2 seconds to build, the fit tried
+        one per (face, size), and it ran on any row-shaped thing in the panel's search band.
+        The chest-opening prompt 「だれが開ける？」 is exactly that — one centred line, right
+        height, right place — so opening a chest cost SIX builds back to back. Measured in the
+        recording of 2026-08-14: nine seconds of frozen capture, starting on the frame the
+        player pressed Open, and 136 index builds across the session. The drop lines of that
+        chest were never sampled, because nothing was sampled.
+
+        The panel says what it is. Every yield line ends in 「 を入手した」, and finding that
+        needs one renderer and one slide — no index, no vocabulary:
+
+            a real mining panel     found at 22px and 23px, both faces
+            「だれが開ける？」        found at nothing, in 0.27s over 14 geometries
+
+        So junk costs a few milliseconds and a real panel costs one build at the geometry the
+        wording itself points at. It is the same evidence `_fit_spacing` already refuses to
+        proceed without — "what decides that this is a panel line is the panel's own wording,
+        not a score" — applied one step earlier, where the expensive part is.
+        """
+        from .capture.glyph import SEPARATOR_MIN_SCORE, _hcrop, _slide, anchor_window
+
+        after = self._mining_after()
+        found = []
+        for face in self._panel_faces():
+            for candidate in sizes:
+                window = self._panel_window_for(candidate)
+                crop = anchor_window(gray, probe, window, columns=self.panel_box)
+                if crop is None:
+                    continue
+                renderer = self._probe_renderer(face, candidate, window)
+                shape = _hcrop(renderer.render(after))
+                if shape is None or shape.shape[1] >= crop.shape[1]:
+                    continue
+                score, _x = _slide(crop, shape, 0, crop.shape[1] - shape.shape[1])
+                if score >= SEPARATOR_MIN_SCORE:
+                    found.append((score, face, candidate))
+        found.sort(reverse=True)
+        if not found:
+            log.debug("wddrop: row %s carries no yield wording at any of %s — not a panel",
+                      probe, sizes)
+        return found
+
+    def _probe_renderer(self, face, size: int, window):
+        """A renderer kept only for the wording probe.
+
+        Cheap to keep: the atlas sheet and its metadata are cached module-wide in
+        capture.glyph, so these hold little more than their own scaled-glyph cache — and the
+        probe touches five characters.
+        """
+        from .capture.glyph import make_renderer
+
+        key = (str(face), int(size), tuple(window))
+        renderer = self._probe_renderers.get(key)
+        if renderer is None:
+            renderer = self._probe_renderers[key] = make_renderer(face, size, window, 0.0)
+        return renderer
+
+    def _panel_faces(self) -> list[str]:
+        """The typefaces the panel might be drawn in: the band's, and its twin.
+
+        THE TWO READERS ARE NOT DRAWN IN THE SAME FACE, and calibration only ever measures
+        one of them. The game ships a scenario twin of its UI font, and which one the message
+        band uses is decided per resolution by whichever scored better on the drop shot; the
+        mining panel is not consulted. Measured on the 1920x1080 recording, same frames, same
+        sizes, only the face changing:
+
+            atlas.ja.scenario   panel fit 0.726   the break line 0.734   nothing read
+            atlas.ja            panel fit 0.905   the break line 0.894   everything read
+
+        So the face is fitted here exactly like the size and the spacing, by score. Cheap:
+        one extra index build the first time a vein is worked, then it is in the profile.
+        """
+        first = str(self._render_source) if self._render_source else None
+        if not first:
+            return []
+        faces, path = [first], Path(first)
+        twin = (path.with_name(path.name.replace(".scenario", "")) if ".scenario" in path.name
+                else path.with_name(f"{path.stem}.scenario{path.suffix}"))
+        if twin.exists() and str(twin) != first:
+            faces.append(str(twin))
+        return faces
 
     def _fit_spacing(self, best, attempt):
         """Fit the panel's letter spacing ABSOLUTELY, against the name it is already reading.
@@ -800,7 +1006,7 @@ class CaptureRunner:
 
         confident = score >= self.mining_min_score
         text = self.mining_prefix + name
-        renderer = self._mining_renderers.get((size, round(spacing, 2), tuple(window)))
+        renderer = self._mining_renderers.get(self._index_key(size, spacing, window))
         _named, cut = self._name_only(crop, renderer, self._mining_after())
         if cut is None:
             # Not a line the panel announced a yield with — see above. Left unsettled on
@@ -846,7 +1052,7 @@ class CaptureRunner:
             # not settle the fit, so a session full of junk panels could otherwise propose
             # one apiece and keep every one — exactly the drift _keep_only_the_fit exists to
             # stop, arriving by a different route.
-            rejected = (size, round(peak, 2), tuple(window))
+            rejected = self._index_key(size, peak, window)
             self._mining_indexes.pop(rejected, None)
             self._mining_renderers.pop(rejected, None)
             self._spacing_fitted = confident
@@ -868,8 +1074,8 @@ class CaptureRunner:
         # halves of the fit alone, this matched nothing, so the "keep" was dropped along with
         # the rest and the very next frame looked up a renderer that had just been deleted.
         # It only ever ran when a panel actually fitted, which is why it stayed hidden.
-        keep = (self._panel_fit[0], round(self._panel_fit[1], 2),
-                self._panel_window_for(self._panel_fit[0]))
+        keep = self._index_key(self._panel_fit[0], self._panel_fit[1],
+                               self._panel_window_for(self._panel_fit[0]))
         for key in [k for k in self._mining_indexes if k != keep]:
             self._mining_indexes.pop(key, None)
             self._mining_renderers.pop(key, None)
@@ -887,8 +1093,10 @@ class CaptureRunner:
         if self._profile_path is None or self._panel_fit is None:
             return
         size, spacing = self._panel_fit
+        face = str(self._render_source) if self._render_source else None
         if (getattr(self.profile, "panel_font_size", None) == size
                 and getattr(self.profile, "panel_letter_spacing", None) == round(spacing, 2)
+                and getattr(self.profile, "panel_font_path", None) == face
                 and getattr(self.profile, "panel_data_version", None) == self._data_version):
             return
         try:
@@ -896,6 +1104,7 @@ class CaptureRunner:
 
             self.profile.panel_font_size = int(size)
             self.profile.panel_letter_spacing = round(float(spacing), 2)
+            self.profile.panel_font_path = face
             self.profile.panel_data_version = self._data_version
             root = self._profile_path.parent
             store = ProfileStore.load(root)
@@ -931,6 +1140,17 @@ class CaptureRunner:
         # builds an index nothing can use and leaves the real one still to be built.
         return self._mining_index(size, self._panel_window_for(size), spacing) is not None
 
+    def _index_key(self, size, spacing, window):
+        """What identifies one built index: its size, spacing, window shape AND FACE.
+
+        The face was missing, so the sweep in _fit_panel asked for a second typeface and was
+        handed back the first one's index — the renderer changed, the templates did not. The
+        sweep could then only ever confirm whichever face it tried first, and at 1920x1080
+        that is the wrong one: the panel read 0.726 instead of 0.905 and nothing in it was
+        recorded.
+        """
+        return (int(size), round(float(spacing), 2), tuple(window), str(self._render_source))
+
     def _panel_window_for(self, size: int) -> tuple[int, int]:
         """The comparison window for a panel line at this size — one definition, so the warm
         build and the fit cannot disagree about its shape."""
@@ -958,7 +1178,11 @@ class CaptureRunner:
         # Leaving it out let an index built for one window be handed a crop cut for another,
         # which fails as "size 3380 is different from 5720" — deep inside the matmul, in a
         # place that says nothing about which two shapes disagreed or why.
-        key = (size, round(spacing, 2), window)
+        # THE FACE IS PART OF THE KEY TOO. Without it the face sweep in _fit_panel asked for
+        # a second face and was handed back the first one's index — the renderer changed, the
+        # templates did not — so the sweep could only ever "confirm" whichever face it tried
+        # first, and the panel stayed unreadable at 1920x1080 with the reason cached.
+        key = self._index_key(size, spacing, window)
         if key in self._mining_indexes:
             self._mining_renderer = self._mining_renderers[key]
             return self._mining_indexes[key]
@@ -1037,7 +1261,13 @@ class CaptureRunner:
             if built is None:
                 return None
             index, window = built
-            win = anchor_window(gray, row, window)
+            # ANCHORED INSIDE THE PANEL. Without the columns this takes the row's ink box
+            # across the WHOLE frame, so at 1920x1080 the origin lands on whatever the
+            # dungeon has lit at that height and the window holds scenery: a real break,
+            # 「北穿の金のつるはしが壊れてしまった」, was the top candidate at 0.2519 — right
+            # answer, unreadable window. The item rows escaped this because their own
+            # recogniser is handed a crop; this one is not.
+            win = anchor_window(gray, row, window, columns=self.panel_box)
             if win is None:
                 continue
             hit = index.recognize(win)
@@ -1045,7 +1275,7 @@ class CaptureRunner:
                 best = hit
         return best
 
-    def _pickaxe_row(self, gray, row, panel_size: int) -> bool:
+    def _pickaxe_row(self, gray, row, panel_size: int, now=None) -> bool:
         """Read one refused row as a pickaxe message; report a BREAK if that is what it is.
 
         Returns whether the row was one of these messages at all, so the caller can stop
@@ -1072,13 +1302,37 @@ class CaptureRunner:
         # a player who has run out of pickaxes already knows, and the only count it could
         # move is the count of pickaxes BROKEN.
         if event is not None and event[0] == BROKE:
-            self._on_pickaxe_event(event)
+            self._on_pickaxe_event(event, now)
         return True
 
-    def _on_pickaxe_event(self, event) -> None:
+    def _on_pickaxe_event(self, event, now=None) -> None:
         from .capture.pickaxe import BROKE
 
         self.stats["pickaxe_messages"] = self.stats.get("pickaxe_messages", 0) + 1
+        # KEPT, so that something other than a log line knows this happened. A break is a
+        # READING like any other — 「北穿の金のつるはしが壊れてしまった」 off the same panel, at
+        # its own size — and it is the reading with the most to lose from being wrong: a false
+        # one spends a pickaxe the player still has and moves the swings-since-break figure
+        # the whole pickaxe-lifetime number rests on. `verify` had no way to see it.
+        #
+        # NOT an event on `on_event`: that stream is the spool, and the wire has no
+        # provenance for this. It is kept here for whoever is looking at this run.
+        started = self.tracker.started_at
+        self._break_index += 1
+        self.pickaxe_events.append({
+            "provenance": "pickaxe_break",
+            "kind": event[0],
+            "occurred_at": (now or started).isoformat() if (now or started) else None,
+            "contents": [{"item_name": event[1], "quantity": 1,
+                          **({"source_frame": self._short_source(self._frame_src)}
+                             if self._frame_src else {})}],
+            "dive": {
+                "break_index_in_dive": self._break_index,
+                "elapsed_seconds": (int((now - started).total_seconds())
+                                    if (now and started) else 0),
+                "dungeon_id": self._dungeon_id,
+            },
+        })
         if event[0] == BROKE and self.pickaxes_left is not None:
             # Decremented on the BREAK, not on every swing. Measured: one vein took five
             # swings and cost ONE pickaxe, so counting per swing would have reported five
@@ -1129,6 +1383,7 @@ class CaptureRunner:
         a chest's lines, and the panel has already done that grouping itself.
         """
         self.stats["mining"] = self.stats.get("mining", 0) + 1
+        self._swing_index += 1
         # NOT decremented here any more. This counted SWINGS as a placeholder while break
         # detection could not be trusted, and it over-counted by an unknown factor: one vein
         # measured gave five yields for a single pickaxe. Breaks are now read directly, so
@@ -1140,6 +1395,11 @@ class CaptureRunner:
             # through the panel's own template — so it restated `item_name` and never once
             # carried what the pixels said.
             entry = {"item_name": name, **self.items.identify(name)}
+            # THE FRAME IT WAS READ FROM, as the band's lines have carried all along. A panel
+            # is read from ONE frame, so there is exactly one to name — and without it a
+            # mining row is the only kind of reading a recording cannot be pointed at.
+            if self._frame_src:
+                entry["source_frame"] = self._short_source(self._frame_src)
             if quantity is None:
                 entry["quantity"], entry["qty_unknown"] = 1, True
             else:
@@ -1171,6 +1431,13 @@ class CaptureRunner:
                 "elapsed_seconds": int((now - started).total_seconds()) if started else 0,
                 "dungeon_id": self._dungeon_id,
                 "floor_id": self._floor_id,
+                # WHICH SWING THIS IS, counted like a chest's index and for the same reason:
+                # something has to tell two of them apart. A chest carries
+                # `chest_index_in_dive` and a panel carried nothing, so every mining event in
+                # a session identified as `<session>#None` — and `verify` keys on that, so
+                # confirming the first swing marked every other swing in the session
+                # "already confirmed" and the rest were never checked at all.
+                "mining_index_in_dive": self._swing_index,
                 "label_source": "user_declared",
             },
         }
@@ -1312,9 +1579,15 @@ class CaptureRunner:
             self._writer = threading.Thread(target=self._drain_writes, name="wddrop-record",
                                             daemon=True)
             self._writer.start()
+        written = target / f"f_{self._episode_frame:05d}.png"
+        # WHERE THIS FRAME IS ABOUT TO LAND, so a reading made from it can name it. A REPLAY
+        # gets this for free — its frames come from files — and a live session had nothing,
+        # so every record from a live capture carried `source_frame: null` and the record
+        # page had nothing to show even in a checkout. The recording is the evidence; the
+        # path is how anyone reaches the right frame in it.
+        self._frame_src = str(written)
         try:
-            self._write_queue.put_nowait(
-                (image.convert("L"), target / f"f_{self._episode_frame:05d}.png"))
+            self._write_queue.put_nowait((image.convert("L"), written))
         except Exception:                                  # queue.Full — never block capture
             self._recorded -= 1
             self._episode_frame -= 1
@@ -1378,7 +1651,13 @@ class CaptureRunner:
         from .capture.glyph import INK_LEVEL, anchor_window, ink_bbox
 
         top, bottom = tuple(self.profile.message_band)
-        band = np.asarray(gray, dtype=np.uint8)[top:bottom, :]
+        # THE SAME COLUMNS LIVE CAPTURE GRABS. Live, everything outside them is already black,
+        # so reading the full width was harmless there and wrong everywhere else: a REPLAY has
+        # whole frames, and at 1920x1080 the scenery either side of the box changes on every
+        # frame, so the band's key never repeats, the line never counts as held still, and
+        # nothing is ever recognised. A recording must read the way the live session did.
+        left, right = self.columns or (0, np.asarray(gray).shape[1])
+        band = np.asarray(gray, dtype=np.uint8)[top:bottom, left:right]
         mask = band > INK_LEVEL
         ink = int(mask.sum())
 
@@ -1411,7 +1690,8 @@ class CaptureRunner:
         if key == self._last_band_key:
             # Held still and not yet read: this is the settled line.
             window = anchor_window(gray, (top, bottom), tuple(self.profile.window),
-                                   x0_fixed=getattr(self.profile, "text_x0", None))
+                                   x0_fixed=getattr(self.profile, "text_x0", None),
+                                   columns=self.columns)
             # Report the FIRST frame the line appeared on, not the second. Recognition fires
             # once the band has held still, i.e. on the second frame -- but the frame worth
             # opening is the one where the line first showed, which is what a person
@@ -1433,7 +1713,14 @@ class CaptureRunner:
             if removed >= REPLACED_INK_FRACTION:
                 text = self._flush_pending(now)
 
-        window = anchor_window(gray, (top, bottom), tuple(self.profile.window))
+        # THE SAME ORIGIN THE SETTLED PATH USES. This one was left deriving its own left edge
+        # from whatever was lit in the band while the path beside it used the calibrated one,
+        # so a line recovered by the flush — the fast-clicker's path — was anchored by a
+        # different rule than a line read in place, and on a whole frame at 1920x1080 that
+        # rule anchors on scenery.
+        window = anchor_window(gray, (top, bottom), tuple(self.profile.window),
+                               x0_fixed=getattr(self.profile, "text_x0", None),
+                               columns=self.columns)
         from .capture.glyph import ink_bbox
         box = ink_bbox(band)
         obs_width = (box[2] - box[0]) if box else 0
@@ -1498,6 +1785,21 @@ class CaptureRunner:
             if margin >= MINING_TIE_MARGIN and fit >= MINING_TIE_MIN_SCORE:
                 name, accepted = winner, True
                 self.stats["tie_broken"] = self.stats.get("tie_broken", 0) + 1
+        if not accepted and match.shortlist and match.best and match.score >= MINING_MIN_SCORE:
+            # A SECOND LOOK AT THE SPACING, before the one at the alignment. They are
+            # different faults: alignment moves the whole line by a pixel or two, spacing
+            # moves character N by N times the error — so the damage grows with the name,
+            # and the names it destroys are the long junk families whose margins are thin to
+            # begin with. See BAND_SPACING_RADIUS for the measurement this was written from.
+            #
+            # BEHIND THE SAME BAR AS THE TIE-BREAK, and for the same reason: a line that does
+            # not even nearly fit is not a line whose geometry needs adjusting. A 17-pixel
+            # speck of dungeon wall came back as 「箒」 at 0.629 once, and re-measuring noise
+            # more carefully is how it would come back again.
+            spaced = self._reread_at_other_spacings(named, match)
+            if spaced is not None:
+                match, name, accepted = spaced, spaced.name, True
+                self.stats["respaced"] = self.stats.get("respaced", 0) + 1
         if not accepted and match.shortlist and match.margin >= self._min_margin():
             # LAST, A SECOND LOOK AT A WIDER ALIGNMENT, for the top few only. A name written
             # in digits does not advance the way the atlas says it does, so by the end of
@@ -1586,6 +1888,103 @@ class CaptureRunner:
             qty = None
         if qty is not None:
             self._quantities[name] = qty
+
+    def _reread_at_other_spacings(self, named, match):
+        """Re-score the shortlist at neighbouring letter spacings; return a match or None.
+
+        Only the shortlist — eight candidates, not two thousand — so this is a handful of
+        renders on a line that has already been refused, rather than a cost on every line.
+        The gates are the recogniser's own: a re-scored reading is accepted on the same
+        evidence any reading is, plus a material gain over the score it is replacing, so a
+        spacing cannot buy an answer by being marginally different.
+
+        A spacing that wins BAND_SPACING_VOTES times is written into the profile. One line is
+        a reading; two is a measurement, and the next session then builds its index at the
+        right value instead of paying for this.
+        """
+        from .capture.glyph import MIN_MARGIN, MIN_SCORE, centred_shifts, make_renderer, zncc
+
+        renderer = self.renderer
+        source = getattr(renderer, "source", None)
+        if source is None or not match.shortlist:
+            return None
+        import numpy as np
+
+        current = round(float(getattr(self.profile, "letter_spacing", 0.0)), 2)
+        obs = np.asarray(named, dtype=float)
+        dxs, dys = centred_shifts(tuple(self.profile.offset), 1)
+        views = [np.roll(np.roll(obs, -dy, 0), -dx, 1) for dy in dys for dx in dxs]
+        best = None
+        steps = int(round(BAND_SPACING_RADIUS * 10))
+        for step in range(-steps, steps + 1):
+            candidate = round(current + step / 10.0, 2)
+            if candidate == current:
+                continue
+            trial = self._spacing_renderers.get(candidate)
+            if trial is None:
+                trial = self._spacing_renderers[candidate] = make_renderer(
+                    source, renderer.size, tuple(renderer.window), candidate)
+            scored = sorted(
+                ((max(zncc(view, trial.render(self.prefix + n)) for view in views), n)
+                 for n in match.shortlist), reverse=True)
+            top, runner = scored[0], (scored[1] if len(scored) > 1 else (0.0, None))
+            if top[0] < MIN_SCORE or top[0] - match.score < BAND_SPACING_MIN_GAIN:
+                continue
+            if best is None or top[0] > best[0][0]:
+                best = (top, runner, candidate, trial)
+        if best is None:
+            return None
+        (score, winner), (rival_score, rival), spacing, trial = best
+        margin = score - rival_score
+        if margin < MIN_MARGIN:
+            # STILL AMBIGUOUS, BUT NOW FOR THE RIGHT REASON. A better spacing lifts the whole
+            # family together — 「北穿の幽霊城の常なる冥刻のガラクタ」 0.8613 against 「…妖なる
+            # 冥刻…」 0.8339 — so the whole-line margin says nothing that the columns the two
+            # names actually differ in do not say far better. Measured on that line: the
+            # tie-break at the fitted spacing gives margin 0.4386 at fit 0.9467.
+            from .capture import glyph as _g
+
+            if rival is None:
+                return None
+            won, tie_margin, fit = _g.break_tie(
+                named, trial, self.prefix, winner, rival,
+                shifts=centred_shifts(tuple(self.profile.offset), 1))
+            if not (tie_margin >= MINING_TIE_MARGIN and fit >= MINING_TIE_MIN_SCORE):
+                return None
+            winner, margin = won, tie_margin
+        log.info("wddrop: %r reads %.4f at spacing %+.1f against %.4f at the calibrated %+.1f",
+                 winner, score, spacing, match.score, current)
+        self._spacing_votes[spacing] = self._spacing_votes.get(spacing, 0) + 1
+        if self._spacing_votes[spacing] == BAND_SPACING_VOTES:
+            self._remember_band_spacing(spacing)
+        from .capture.glyph import RenderMatch
+
+        return RenderMatch(winner, score, margin, True, runner_up=None, best=winner,
+                           template_width=match.template_width)
+
+    def _remember_band_spacing(self, spacing: float) -> None:
+        """Write a measured spacing into the profile, for the NEXT session to build with.
+
+        Not applied to the running index: rebuilding it takes ~1.2s over 2,150 names, and
+        doing that mid-chest is exactly the freeze that cost a chest the last time something
+        expensive ran at the wrong moment. The re-scoring above already reads this session's
+        lines correctly; the profile is so that the next one does not have to.
+        """
+        if self._profile_path is None:
+            return
+        try:
+            from .calibration import ProfileStore
+
+            self.profile.letter_spacing = float(spacing)
+            root = self._profile_path.parent
+            store = ProfileStore.load(root)
+            store.put(self.profile)
+            store.save(root)
+            self.profile.save(self._profile_path)
+            log.info("wddrop: band letter spacing %+.1f saved to the profile — it was "
+                     "measured on %d line(s) this session", spacing, BAND_SPACING_VOTES)
+        except Exception:                                  # noqa: BLE001
+            log.debug("wddrop: could not save the band spacing", exc_info=True)
 
     def _queue(self, match, now) -> None:
         from .review import Candidate

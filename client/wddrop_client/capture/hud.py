@@ -118,7 +118,13 @@ class HudDetector:
             )
         if not profile.hud_region:
             raise SystemExit("[!] this profile has no HUD region; re-run `calibrate`.")
-        return cls(template, region=tuple(profile.hud_region))
+        # THE FITTED THRESHOLD, when the profile has one. It was written and then ignored:
+        # every detector ran at the built-in 0.60, which is above every score a correct band
+        # reached at 1920x1080 — so calibration could measure the right number, store it, and
+        # still hand back a detector that says the minimap is never there.
+        threshold = getattr(profile, "hud_threshold", None)
+        return cls(template, region=tuple(profile.hud_region),
+                   **({"threshold": threshold} if threshold else {}))
 
     def read(self, frame) -> HudReading:
         candidate = _to_gray_array(crop_region(frame, self.region), self.sample_size)

@@ -1,51 +1,166 @@
 {
- "704x1241@ja": {
-  "frame_size": [
-   704,
-   1241
-  ],
-  "message_band": [
-   999,
-   1020
-  ],
-  "font_path": "atlas.ja.json",
-  "font_size": 25,
-  "offset": [
-   -2,
-   1
-  ],
-  "calibration_score": 0.9141859521327736,
-  "letter_spacing": 1.1,
-  "window": [
-   976,
-   51
-  ],
-  "text_x0": 93,
-  "locale": "ja",
-  "hud_region": [
-   0.890625,
-   0.16116035455278002,
-   0.9701704545454546,
-   0.19661563255439163
-  ],
-  "hud_threshold": null,
-  "hud_template_b64": "iVBORw0KGgoAAAANSUhEUgAAADgAAAAsCAAAAAAVqiRPAAAFE0lEQVR4nG1WTXMdRxU953bPzHtPlhUb2RiFECBJOaGIKx8ESCobcEGxZ0eFX8iCbNilqBQuSokqRSDYIdiSjUuxLRQJx5Lex0xP38Ni5klPVnoxi5k+c8+9537xd/j6oKEEZLkkAjTSWxcAAQIQAhDgkjwyuQBE7k1agd0dAQBJyEEBAMDuKZGC4BAAKO4dtVL3Ud01SVCWvH8FQCIcgBwiO4v7QTq+ANAhh1p3OI4PDSAIwkhQECMoSce8KOWUc8qSFoAECAazioBJRFRWz6XnmZvZrG7zgr25pxbKQmUIJKBoDlCACwAFpdkUMQjfcMgaKrtwRcsEIEkEAfc0Hb35TSgAmH4+bswMBKIggi6RIgC1zepbCzpAEoydok8eHqayIxOzCElOk0DJswtCStaravBMAh6LILi8p+oClHNmkAh5bh0A7m4O63ECcGG0/MzezsQGtvb8xc4ngECE4LmtW1AgqKZxQHiymT0LwIMQYmoyDc23LgKaSx4Bz00zblwiSebG017G1+MUzAC0SQCUM46a3udjYKrbUZXa5BKyOw7/Ju4GKwoDQDnB3MzafCKRiCjlph78uGzqaZKnWavp4brFWMUYCAMBGvLU20VdxCh4k85dXzNIkFT7Zx/eK4MRlKhgRgtwzHgMEjuqUK4RQpfp4sbGzijSc5uzrCjLGAhCxKmjCEi57oMltZ+ub7XLlvOsic8OnzwoB4PSzqDYWYTqx5cHBOWT7b98MR3Bm1mqXnp15aF2Jg4GLhRen1ERAJUePjsAAB5u/OvI0kyztHT1+gujvdEHexN5CS1WS5c5BMmmI0r6vqtV9jx85ffPRF653n74KKVRRmqfqpcI0KjbL64CAK68t/WnO1mMP/vNMgEMflne2BxPh6FNOAsMEUeNI22tXoyro2L9H+Pz7/x8LejT5R8UK29Mm22lructBEcRsBDD43Geba5f/P5315ZfHy1vv/DuGtvtvxavX12pqtHad8KT3ccnMEBAFGhF3D0cb//5n3rutXcuF1cv33v5HCePbtw82P7Vq5t3w9vX4pc3v9jtk7RXLgKwWM2a2zc2hDs7D357qVxdBfzLP35W4+77Rx8X7/4C+OGPNv7gp9pQFGBFhVvaqgLa6d//99Ybz8lx84ObbVTeeT/8+qcG4MIrKzgV1wjQYmn7HlcC2np6f/zVT170W+ufp2Hp9ezxt88vEUJcOl9rQX9EkRbK4Fxm9FzF2cPp/r/9zn+OBkuDbG0yI0AJ5WlBIghTNDMEuscYtb/7MWDVcFjl3OTmaHIOoOqZ42mqoDEEmpM0uDcGMMQioBw2B7e/dy3Ax4/+u/w0ECBhpEmkBbNLbzvu3ZfEWA4nt1L9Wrj/ySdHF+IpIHncBkXBAA1fyjq4l1qjxYHXW9OPeLj3VSbPWJxnBAnA3c5lFXlaKAJW5MnmnX5CzBOnAwrqWiMAwPsCUs7jXDC3TrZOnZklsc+9fu5S3lee2nEKAHKeg/gUUAJgJNTNwe4HBnh9zE0AMCi0gO9ah4yAuvB0Q/TKm/N2WAyGOGgcuLTU/bNvHd1EJSHQQTKYHLg0mHsVygqTJKBYkmC0k54D9CsGBVgMFLC0dOKOYdiTFszmVAmIIqFuzDFEHZwKgxm8D9C4jXMkr0mAVxRkVE5tPanPBn9+vBqUwTof1W0iLgPkYKg0a08tHb1YxhCqQWFGdT6erEcSaFEIuVXfIdhtFB1lC0UMPdX/A1T0DMI0zVPBAAAAAElFTkSuQmCC",
-  "hud_template_path": null,
-  "panel_font_size": 25,
-  "panel_letter_spacing": 0.0,
-  "panel_data_version": "267a9940013e286c",
-  "notes": {
-   "self_check_name": "蒼雫の鉱石",
-   "self_check_score": 0.9121,
-   "self_check_margin": 0.1066,
-   "name_ends_at": 134,
-   "candidate_bands": 1,
-   "window": [
-    976,
-    51
-   ],
-   "letter_spacing": 1.1,
-   "text_x0": 93
+  "704x1241@ja": {
+    "frame_size": [
+      704,
+      1241
+    ],
+    "message_band": [
+      999,
+      1020
+    ],
+    "font_path": "atlas.ja.json",
+    "font_size": 25,
+    "offset": [
+      -2,
+      1
+    ],
+    "calibration_score": 0.9141859521327736,
+    "letter_spacing": 1.1,
+    "window": [
+      976,
+      51
+    ],
+    "text_x0": 93,
+    "locale": "ja",
+    "hud_region": [
+      0.890625,
+      0.16116035455278002,
+      0.9701704545454546,
+      0.19661563255439163
+    ],
+    "hud_threshold": null,
+    "hud_template_b64": "iVBORw0KGgoAAAANSUhEUgAAADgAAAAsCAAAAAAVqiRPAAAFE0lEQVR4nG1WTXMdRxU953bPzHtPlhUb2RiFECBJOaGIKx8ESCobcEGxZ0eFX8iCbNilqBQuSokqRSDYIdiSjUuxLRQJx5Lex0xP38Ni5klPVnoxi5k+c8+9537xd/j6oKEEZLkkAjTSWxcAAQIQAhDgkjwyuQBE7k1agd0dAQBJyEEBAMDuKZGC4BAAKO4dtVL3Ud01SVCWvH8FQCIcgBwiO4v7QTq+ANAhh1p3OI4PDSAIwkhQECMoSce8KOWUc8qSFoAECAazioBJRFRWz6XnmZvZrG7zgr25pxbKQmUIJKBoDlCACwAFpdkUMQjfcMgaKrtwRcsEIEkEAfc0Hb35TSgAmH4+bswMBKIggi6RIgC1zepbCzpAEoydok8eHqayIxOzCElOk0DJswtCStaravBMAh6LILi8p+oClHNmkAh5bh0A7m4O63ECcGG0/MzezsQGtvb8xc4ngECE4LmtW1AgqKZxQHiymT0LwIMQYmoyDc23LgKaSx4Bz00zblwiSebG017G1+MUzAC0SQCUM46a3udjYKrbUZXa5BKyOw7/Ju4GKwoDQDnB3MzafCKRiCjlph78uGzqaZKnWavp4brFWMUYCAMBGvLU20VdxCh4k85dXzNIkFT7Zx/eK4MRlKhgRgtwzHgMEjuqUK4RQpfp4sbGzijSc5uzrCjLGAhCxKmjCEi57oMltZ+ub7XLlvOsic8OnzwoB4PSzqDYWYTqx5cHBOWT7b98MR3Bm1mqXnp15aF2Jg4GLhRen1ERAJUePjsAAB5u/OvI0kyztHT1+gujvdEHexN5CS1WS5c5BMmmI0r6vqtV9jx85ffPRF653n74KKVRRmqfqpcI0KjbL64CAK68t/WnO1mMP/vNMgEMflne2BxPh6FNOAsMEUeNI22tXoyro2L9H+Pz7/x8LejT5R8UK29Mm22lructBEcRsBDD43Geba5f/P5315ZfHy1vv/DuGtvtvxavX12pqtHad8KT3ccnMEBAFGhF3D0cb//5n3rutXcuF1cv33v5HCePbtw82P7Vq5t3w9vX4pc3v9jtk7RXLgKwWM2a2zc2hDs7D357qVxdBfzLP35W4+77Rx8X7/4C+OGPNv7gp9pQFGBFhVvaqgLa6d//99Ybz8lx84ObbVTeeT/8+qcG4MIrKzgV1wjQYmn7HlcC2np6f/zVT170W+ufp2Hp9ezxt88vEUJcOl9rQX9EkRbK4Fxm9FzF2cPp/r/9zn+OBkuDbG0yI0AJ5WlBIghTNDMEuscYtb/7MWDVcFjl3OTmaHIOoOqZ42mqoDEEmpM0uDcGMMQioBw2B7e/dy3Ax4/+u/w0ECBhpEmkBbNLbzvu3ZfEWA4nt1L9Wrj/ySdHF+IpIHncBkXBAA1fyjq4l1qjxYHXW9OPeLj3VSbPWJxnBAnA3c5lFXlaKAJW5MnmnX5CzBOnAwrqWiMAwPsCUs7jXDC3TrZOnZklsc+9fu5S3lee2nEKAHKeg/gUUAJgJNTNwe4HBnh9zE0AMCi0gO9ah4yAuvB0Q/TKm/N2WAyGOGgcuLTU/bNvHd1EJSHQQTKYHLg0mHsVygqTJKBYkmC0k54D9CsGBVgMFLC0dOKOYdiTFszmVAmIIqFuzDFEHZwKgxm8D9C4jXMkr0mAVxRkVE5tPanPBn9+vBqUwTof1W0iLgPkYKg0a08tHb1YxhCqQWFGdT6erEcSaFEIuVXfIdhtFB1lC0UMPdX/A1T0DMI0zVPBAAAAAElFTkSuQmCC",
+    "hud_template_path": null,
+    "panel_font_size": 25,
+    "panel_letter_spacing": 0.0,
+    "panel_data_version": "440b61bc85a9d0dc",
+    "notes": {
+      "self_check_name": "蒼雫の鉱石",
+      "self_check_score": 0.9121,
+      "self_check_margin": 0.1066,
+      "name_ends_at": 134,
+      "candidate_bands": 1,
+      "window": [
+        976,
+        51
+      ],
+      "letter_spacing": 1.1,
+      "text_x0": 93
+    }
+  },
+  "1920x1080@ja": {
+    "frame_size": [
+      1920,
+      1080
+    ],
+    "message_band": [
+      870,
+      887
+    ],
+    "font_path": "atlas.ja.scenario.json",
+    "font_size": 22,
+    "offset": [
+      -2,
+      0
+    ],
+    "calibration_score": 0.9173038855105463,
+    "letter_spacing": 0.5,
+    "window": [
+      743,
+      45
+    ],
+    "text_x0": 735,
+    "locale": "ja",
+    "hud_region": [
+      0.875,
+      0.2111111111111111,
+      0.9546875,
+      0.24537037037037038
+    ],
+    "hud_threshold": 0.3960993686498972,
+    "hud_template_b64": "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",
+    "hud_template_path": null,
+    "panel_font_size": 22,
+    "panel_letter_spacing": 0.0,
+    "panel_font_path": "atlas.ja.json",
+    "panel_data_version": "440b61bc85a9d0dc",
+    "notes": {
+      "self_check_name": "100バイン紙幣",
+      "self_check_score": 0.9241,
+      "self_check_margin": 0.4704,
+      "name_ends_at": 156,
+      "candidate_bands": 1,
+      "window": [
+        743,
+        45
+      ],
+      "letter_spacing": 0.5,
+      "text_x0": 735,
+      "hud_stability": 0.9996,
+      "hud_leak": -0.2074,
+      "hud_threshold": 0.3961,
+      "spacing_measured_on": 4,
+      "spacing_mean_at_fit": 0.8424,
+      "spacing_mean_shipped": 0.9064
+    }
+  },
+  "1600x900@ja": {
+    "frame_size": [
+      1600,
+      900
+    ],
+    "message_band": [
+      725,
+      739
+    ],
+    "font_path": "atlas.ja.scenario.json",
+    "font_size": 19,
+    "offset": [
+      -2,
+      0
+    ],
+    "calibration_score": 0.8226051460246313,
+    "letter_spacing": -0.2,
+    "window": [
+      623,
+      40
+    ],
+    "text_x0": 614,
+    "locale": "ja",
+    "hud_region": [
+      0.9125,
+      0.17777777777777778,
+      0.9925,
+      0.21222222222222223
+    ],
+    "hud_threshold": 0.5165472489535016,
+    "hud_template_b64": "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",
+    "hud_template_path": null,
+    "panel_font_size": 18,
+    "panel_letter_spacing": 0.0,
+    "panel_font_path": "atlas.ja.json",
+    "panel_data_version": "440b61bc85a9d0dc",
+    "notes": {
+      "self_check_name": "北穿の幽霊城の妖なる四鱗のガラクタ",
+      "self_check_score": 0.8033,
+      "self_check_margin": 0.0297,
+      "name_ends_at": 323,
+      "candidate_bands": 1,
+      "window": [
+        623,
+        40
+      ],
+      "letter_spacing": -0.2,
+      "text_x0": 614,
+      "self_check_tie": [
+        0.398,
+        0.9279
+      ],
+      "hud_stability": 0.9535,
+      "hud_leak": 0.0796,
+      "hud_threshold": 0.5165,
+      "hud_frames": 4,
+      "panel_fitted_at": "18px +0.0, replayed"
+    }
   }
- }
 }

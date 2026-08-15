@@ -214,3 +214,41 @@ def find_window(title: str | None = None, expect_size: tuple[int, int] | None = 
              "process" if score[0] else "size" if score[1] else "exact title" if score[2]
              else "title substring")
     return best
+
+
+# WHAT THE GAME ITSELF IS SET TO RENDER
+# -------------------------------------
+# Unity writes the player's chosen resolution to the registry, so this is the game's own
+# answer rather than an inference from pixels. It matters when the captured frame is larger
+# than the calibration (see calibration.scaled_from): the layout is correct after resampling
+# whatever the game renders at — the render resolution cancels, because a UI element is
+# `units * height / 1920` at every step — but the INK does not. Measured over 15 confirmed
+# chest lines, read with the 1920x1080 fit after the full chain:
+#
+#     game 1920x1080 -> 2560x1440 screen -> resampled    mean 0.8905   min 0.8473
+#     game 1280x 720 -> 2560x1440 screen -> resampled    mean 0.8284   min 0.5626  <- under
+#                                                                                     the gate
+# The last one loses a reading with no error anywhere: an under-gate line is dropped by
+# design. So a game rendering below the calibration is worth saying out loud.
+GAME_PREFS_KEY = r"Software\drecom\WizardryVariantsDaphne"
+# Unity appends a hash of the preference name; these are that key's actual value names.
+_WIDTH_VALUE = "Screenmanager Resolution Width_h182942802"
+_HEIGHT_VALUE = "Screenmanager Resolution Height_h2627697771"
+
+
+def rendered_resolution() -> tuple[int, int] | None:
+    """The resolution the game is rendering at, from its own settings. None off Windows,
+    or when the game has never saved a resolution."""
+    try:
+        import winreg
+    except ImportError:                                # not Windows: nothing to read
+        return None
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, GAME_PREFS_KEY) as key:
+            width, _ = winreg.QueryValueEx(key, _WIDTH_VALUE)
+            height, _ = winreg.QueryValueEx(key, _HEIGHT_VALUE)
+    except OSError:
+        return None
+    if not width or not height:
+        return None
+    return int(width), int(height)

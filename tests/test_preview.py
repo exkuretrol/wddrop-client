@@ -64,6 +64,30 @@ def test_every_region_capture_grabs_is_one_the_picture_names():
         ["message band", "HUD", "mining panel"]
 
 
+def test_each_strip_is_as_wide_as_the_thing_it_reads_and_no_wider():
+    """THREE boxes, not one. The message band is measured on this machine; the mining panel
+    is the game's own layout scaled to this screen and is WIDER — 644 columns against 504 at
+    1920x1080 — and the ▼ that says the panel is finished lives in the difference."""
+    from wddrop_client.calibration import panel_columns, read_columns
+
+    profile = a_profile(frame_size=(1920, 1080), text_x0=732, message_band=(870, 887))
+    boxes = dict(named_regions(profile))
+    for label, expected in (("message band", read_columns(profile)),
+                            ("mining panel", panel_columns(profile))):
+        x, _y, w, _h = boxes[label]
+        assert (x, x + w) == expected, f"{label} is {w}px wide, expected {expected}"
+    assert boxes["mining panel"][2] > boxes["message band"][2], \
+        "the panel is the wider of the two, and reading it in the band's columns loses the ▼"
+    assert boxes["HUD"][0] > boxes["mining panel"][0] + boxes["mining panel"][2], \
+        "the minimap is not inside either box"
+
+
+def test_an_uncalibrated_left_edge_leaves_the_strips_full_width():
+    profile = a_profile(text_x0=None)
+    x, _y, w, _h = dict(named_regions(profile))["message band"]
+    assert (x, w) == (0, profile.frame_size[0])
+
+
 def test_a_profile_with_no_hud_does_not_claim_one():
     profile = a_profile(hud_region=None)
     assert [label for label, _ in named_regions(profile)] == ["message band", "mining panel"]

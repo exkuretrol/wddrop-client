@@ -119,9 +119,6 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "Wizardry Variants Daphne Truhen-Protokoll"},
     # Beside the name, never in small print. This leads with a game's title, and nobody
     # should have to wonder whether it came from the people who made the game.
-    "unofficial": {
-        "zh_tw": "非官方", "zh_cn": "非官方", "ja": "非公式", "ko": "비공식",
-        "de": "inoffiziell"},
     "Recording. Open a chest or work a vein and it will appear here.": {
         "zh_tw": "記錄中。打開寶箱或進行採掘，結果會出現在這裡。",
         "zh_cn": "记录中。打开宝箱或进行采掘，结果会出现在这里。",
@@ -341,6 +338,42 @@ STRINGS: dict[str, dict[str, str]] = {
                    "ko": "보정…", "de": "Kalibrieren…"},
     # Looking at what the client can see. Development only, but translated like everything
     # else: the language of a window should not change depending on which build it is.
+    "that message wrapped onto a second line, so the fit had less to go on. If "
+    "readings look poor later, calibrate again on a chest whose whole sentence "
+    "fits on one row.": {
+        "zh_tw": "那則訊息換到了第二行，所以校正能依據的東西比較少。之後若辨識不佳，"
+                 "請找一個整句都在同一行的寶箱重新校正。",
+        "zh_cn": "那条消息换到了第二行，所以校正能依据的东西比较少。之后若识别不佳，"
+                 "请找一个整句都在同一行的宝箱重新校正。",
+        "ja": "そのメッセージは2行目に折り返したため、較正の手がかりが少なくなりました。"
+              "後で読み取りが悪ければ、文全体が1行に収まる宝箱でもう一度較正してください。",
+        "ko": "그 메시지가 두 번째 줄로 넘어가서 보정에 쓸 단서가 적었습니다. 나중에 인식이 "
+              "좋지 않으면 문장 전체가 한 줄에 들어가는 상자로 다시 보정하세요.",
+        "de": "Diese Meldung ist auf eine zweite Zeile umgebrochen, also hatte die "
+              "Kalibrierung weniger, woran sie sich halten konnte. Wenn die Lesungen später "
+              "schlecht aussehen, kalibriere erneut an einer Truhe, deren ganzer Satz in "
+              "eine Zeile passt."},
+    "Use the saved shot": {
+        "zh_tw": "使用已存的擷圖", "zh_cn": "使用已存的截图", "ja": "保存済みの画像を使う",
+        "ko": "저장된 사진 사용", "de": "Gespeicherte Aufnahme verwenden"},
+    "No saved shot here yet — capture one.": {
+        "zh_tw": "這一步還沒有存過擷圖 — 請先擷取。",
+        "zh_cn": "这一步还没有存过截图 — 请先截取。",
+        "ja": "この手順の画像はまだありません — 先に撮影してください。",
+        "ko": "이 단계의 사진이 아직 없습니다 — 먼저 촬영하세요.",
+        "de": "Für diesen Schritt gibt es noch keine Aufnahme — nimm zuerst eine auf."},
+    "using the saved {name} ({size})": {
+        "zh_tw": "使用已存的 {name}（{size}）", "zh_cn": "使用已存的 {name}（{size}）",
+        "ja": "保存済みの {name}（{size}）を使います",
+        "ko": "저장된 {name}({size})을 사용합니다",
+        "de": "verwende die gespeicherte {name} ({size})"},
+    "No calibration for {size} yet. Calibrate at this size, then look again.": {
+        "zh_tw": "還沒有 {size} 的校正。請先在這個尺寸校正，再回來看。",
+        "zh_cn": "还没有 {size} 的校正。请先在这个尺寸校正，再回来看。",
+        "ja": "{size} の較正がまだありません。このサイズで較正してから見てください。",
+        "ko": "{size} 보정이 아직 없습니다. 이 크기로 보정한 뒤 다시 보세요.",
+        "de": "Für {size} gibt es noch keine Kalibrierung. Kalibriere in dieser Größe und "
+              "schau dann erneut."},
     "See it…": {"zh_tw": "看一下…", "zh_cn": "看一下…", "ja": "見てみる…",
                 "ko": "살펴보기…", "de": "Ansehen…"},
     "What the client sees": {
@@ -546,6 +579,224 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "191 Gegenstandsnamen werden abgeschnitten zu einem anderen gültigen Namen — "
               "eine halb gelesene Zeile ist keine knappe Verfehlung, sondern eine "
               "selbstsichere Falschantwort."},
+    "Play at a size this client knows": {
+        "zh_tw": "\u8acb\u7528\u672c\u5de5\u5177\u8a8d\u5f97\u7684\u5c3a\u5bf8\u904a\u73a9",
+        "zh_cn": "\u8bf7\u7528\u672c\u5de5\u5177\u8ba4\u5f97\u7684\u5c3a\u5bf8\u6e38\u73a9",
+        "ja": "\u5bfe\u5fdc\u3057\u3066\u3044\u308b\u30b5\u30a4\u30ba\u3067\u904a\u3076",
+        "ko": "\uc774 \ub3c4\uad6c\uac00 \uc544\ub294 \ud06c\uae30\ub85c \ud50c\ub808\uc774\ud558\uc138\uc694",
+        "de": "Spiele in einer Gr\u00f6\u00dfe, die dieser Client kennt"},
+    "both are options in the game itself, under Screen size, and both are read without any "
+    "setup here.": {
+        "zh_tw": "\u5169\u7a2e\u90fd\u5728\u904a\u6232\u81ea\u5df1\u7684\u300c\u756b\u9762\u5c3a\u5bf8\u300d\u9078\u9805\u88e1\uff0c"
+                 "\u800c\u4e14\u90fd\u80fd\u76f4\u63a5\u8b80\u53d6\uff0c\u9019\u908a\u4e0d\u5fc5\u505a\u4efb\u4f55\u8a2d\u5b9a\u3002",
+        "zh_cn": "\u4e24\u79cd\u90fd\u5728\u6e38\u620f\u81ea\u5df1\u7684\u201c\u753b\u9762\u5c3a\u5bf8\u201d\u9009\u9879\u91cc\uff0c"
+                 "\u800c\u4e14\u90fd\u80fd\u76f4\u63a5\u8bfb\u53d6\uff0c\u8fd9\u8fb9\u4e0d\u5fc5\u505a\u4efb\u4f55\u8bbe\u7f6e\u3002",
+        "ja": "\u3069\u3061\u3089\u3082\u30b2\u30fc\u30e0\u306e\u30aa\u30d7\u30b7\u30e7\u30f3\u306e\u300c\u753b\u9762\u30b5\u30a4\u30ba\u300d"
+              "\u306b\u3042\u308a\u3001\u3053\u3061\u3089\u3067\u306e\u8a2d\u5b9a\u306a\u3057\u3067\u8aad\u3081\u307e\u3059\u3002",
+        "ko": "\ub458 \ub2e4 \uac8c\uc784 \uc635\uc158\uc758 \u2018\ud654\uba74 \ud06c\uae30\u2019\uc5d0 \uc788\uc73c\uba70, "
+              "\uc5ec\uae30\uc11c \ub530\ub85c \uc124\uc815\ud560 \uac83 \uc5c6\uc774 \uc77d\uc2b5\ub2c8\ub2e4.",
+        "de": "Beide stehen in den Optionen des Spiels unter Bildschirmgr\u00f6\u00dfe, und beide "
+              "werden ohne Einrichtung hier gelesen."},
+    "Full screen is fine at those sizes. The game keeps drawing at the size you chose and "
+    "Windows stretches it to fill your screen; this client reads the picture at the size it "
+    "was drawn.": {
+        "zh_tw": "\u9019\u5169\u7a2e\u5c3a\u5bf8\u4e0b\u5168\u87a2\u5e55\u4e5f\u6c92\u554f\u984c\u3002\u904a\u6232\u4ecd\u7136"
+                 "\u4ee5\u4f60\u9078\u7684\u5c3a\u5bf8\u7e6a\u88fd\uff0c\u518d\u7531 Windows \u653e\u5927\u5230\u6574\u500b\u87a2\u5e55\uff1b"
+                 "\u672c\u5de5\u5177\u6703\u4f9d\u7167\u5b83\u539f\u672c\u7e6a\u88fd\u7684\u5c3a\u5bf8\u4f86\u8b80\u3002",
+        "zh_cn": "\u8fd9\u4e24\u79cd\u5c3a\u5bf8\u4e0b\u5168\u5c4f\u4e5f\u6ca1\u95ee\u9898\u3002\u6e38\u620f\u4ecd\u7136"
+                 "\u4ee5\u4f60\u9009\u7684\u5c3a\u5bf8\u7ed8\u5236\uff0c\u518d\u7531 Windows \u653e\u5927\u5230\u6574\u4e2a\u5c4f\u5e55\uff1b"
+                 "\u672c\u5de5\u5177\u4f1a\u6309\u7167\u5b83\u539f\u672c\u7ed8\u5236\u7684\u5c3a\u5bf8\u6765\u8bfb\u3002",
+        "ja": "\u3053\u306e\u30b5\u30a4\u30ba\u306a\u3089\u5168\u753b\u9762\u3067\u3082\u554f\u984c\u3042\u308a\u307e\u305b\u3093\u3002"
+              "\u30b2\u30fc\u30e0\u306f\u9078\u3093\u3060\u30b5\u30a4\u30ba\u306e\u307e\u307e\u63cf\u753b\u3057\u3001Windows \u304c"
+              "\u753b\u9762\u306b\u5408\u308f\u305b\u3066\u62e1\u5927\u3057\u307e\u3059\u3002\u672c\u30c4\u30fc\u30eb\u306f"
+              "\u63cf\u304b\u308c\u305f\u30b5\u30a4\u30ba\u3067\u8aad\u307f\u307e\u3059\u3002",
+        "ko": "\uc774 \ud06c\uae30\ub77c\uba74 \uc804\uccb4 \ud654\uba74\ub3c4 \uad1c\ucc2e\uc2b5\ub2c8\ub2e4. \uac8c\uc784\uc740 "
+              "\uc120\ud0dd\ud55c \ud06c\uae30\ub85c \uadf8\ub9ac\uace0 Windows \uac00 \ud654\uba74\uc5d0 \ub9de\uac8c \ud655\ub300\ud558\uba70, "
+              "\uc774 \ub3c4\uad6c\ub294 \uadf8\ub824\uc9c4 \ud06c\uae30\ub85c \uc77d\uc2b5\ub2c8\ub2e4.",
+        "de": "Vollbild ist in diesen Gr\u00f6\u00dfen in Ordnung. Das Spiel zeichnet weiterhin in "
+              "der gew\u00e4hlten Gr\u00f6\u00dfe, Windows streckt das Bild auf deinen Monitor, und "
+              "dieser Client liest es in der Gr\u00f6\u00dfe, in der es gezeichnet wurde."},
+    "Choose the size in the game before going full screen, though. Full screen enlarges "
+    "whatever the game draws, and enlarging cannot put back detail that was never drawn.": {
+        "zh_tw": "\u4e0d\u904e\u8acb\u5148\u5728\u904a\u6232\u88e1\u9078\u597d\u5c3a\u5bf8\uff0c\u518d\u9032\u5168\u87a2\u5e55\u3002"
+                 "\u5168\u87a2\u5e55\u53ea\u662f\u628a\u904a\u6232\u756b\u51fa\u4f86\u7684\u756b\u9762\u653e\u5927\uff0c"
+                 "\u653e\u5927\u4e0d\u6703\u88dc\u56de\u539f\u672c\u5c31\u6c92\u756b\u51fa\u4f86\u7684\u7d30\u7bc0\u3002",
+        "zh_cn": "\u4e0d\u8fc7\u8bf7\u5148\u5728\u6e38\u620f\u91cc\u9009\u597d\u5c3a\u5bf8\uff0c\u518d\u8fdb\u5168\u5c4f\u3002"
+                 "\u5168\u5c4f\u53ea\u662f\u628a\u6e38\u620f\u753b\u51fa\u6765\u7684\u753b\u9762\u653e\u5927\uff0c"
+                 "\u653e\u5927\u4e0d\u4f1a\u8865\u56de\u539f\u672c\u5c31\u6ca1\u753b\u51fa\u6765\u7684\u7ec6\u8282\u3002",
+        "ja": "\u305f\u3060\u3057\u3001\u5168\u753b\u9762\u306b\u3059\u308b\u524d\u306b\u30b2\u30fc\u30e0\u5074\u3067\u30b5\u30a4\u30ba\u3092"
+              "\u9078\u3093\u3067\u304f\u3060\u3055\u3044\u3002\u5168\u753b\u9762\u306f\u63cf\u304b\u308c\u305f\u753b\u9762\u3092"
+              "\u62e1\u5927\u3059\u308b\u3060\u3051\u3067\u3001\u63cf\u304b\u308c\u306a\u304b\u3063\u305f\u7d30\u90e8\u306f\u623b\u308a\u307e\u305b\u3093\u3002",
+        "ko": "\ub2e4\ub9cc \uc804\uccb4 \ud654\uba74\uc73c\ub85c \uac00\uae30 \uc804\uc5d0 \uac8c\uc784\uc5d0\uc11c \ud06c\uae30\ub97c "
+              "\uba3c\uc800 \uace0\ub974\uc138\uc694. \uc804\uccb4 \ud654\uba74\uc740 \uadf8\ub824\uc9c4 \ud654\uba74\uc744 \ud655\ub300\ud560 "
+              "\ubfd0, \uadf8\ub9ac\uc9c0 \uc54a\uc740 \uc138\ubd80\ub294 \ub418\ub3cc\uc544\uc624\uc9c0 \ubabb\ud569\ub2c8\ub2e4.",
+        "de": "Stelle die Gr\u00f6\u00dfe aber im Spiel ein, bevor du auf Vollbild gehst. Vollbild "
+              "vergr\u00f6\u00dfert nur, was das Spiel zeichnet \u2014 was nie gezeichnet wurde, kommt "
+              "dadurch nicht zur\u00fcck."},
+    "a tall window, if you prefer it. The game has no such option, so it needs {tool}: a "
+    "small free utility by NowvaB that resizes the game window and nothing else. It is not "
+    "ours and not bundled here.": {
+        "zh_tw": "\u5982\u679c\u4f60\u504f\u597d\u76f4\u5f0f\u8996\u7a97\u3002\u904a\u6232\u672c\u8eab\u6c92\u6709\u9019\u500b\u9078\u9805\uff0c"
+                 "\u6240\u4ee5\u9700\u8981 {tool}\uff1a\u5b83\u662f NowvaB \u5beb\u7684\u514d\u8cbb\u5c0f\u5de5\u5177\uff0c"
+                 "\u53ea\u8abf\u6574\u904a\u6232\u8996\u7a97\u5927\u5c0f\u3002\u5b83\u4e0d\u5c6c\u65bc\u6211\u5011\uff0c\u4e5f\u6c92\u6709\u5167\u542b\u5728\u6b64\u3002",
+        "zh_cn": "\u5982\u679c\u4f60\u504f\u597d\u7ad6\u7248\u7a97\u53e3\u3002\u6e38\u620f\u672c\u8eab\u6ca1\u6709\u8fd9\u4e2a\u9009\u9879\uff0c"
+                 "\u6240\u4ee5\u9700\u8981 {tool}\uff1a\u5b83\u662f NowvaB \u5199\u7684\u514d\u8d39\u5c0f\u5de5\u5177\uff0c"
+                 "\u53ea\u8c03\u6574\u6e38\u620f\u7a97\u53e3\u5927\u5c0f\u3002\u5b83\u4e0d\u5c5e\u4e8e\u6211\u4eec\uff0c\u4e5f\u6ca1\u6709\u5185\u542b\u5728\u6b64\u3002",
+        "ja": "\u7e26\u9577\u30a6\u30a3\u30f3\u30c9\u30a6\u304c\u597d\u307f\u306a\u3089\u3002\u30b2\u30fc\u30e0\u306b\u305d\u306e\u8a2d\u5b9a"
+              "\u306f\u306a\u3044\u306e\u3067 {tool} \u304c\u5fc5\u8981\u3067\u3059\u3002NowvaB \u6c0f\u306b\u3088\u308b\u7121\u6599\u306e"
+              "\u5c0f\u3055\u306a\u30c4\u30fc\u30eb\u3067\u3001\u30b2\u30fc\u30e0\u30a6\u30a3\u30f3\u30c9\u30a6\u306e\u5927\u304d\u3055\u3092"
+              "\u5909\u3048\u308b\u3060\u3051\u3067\u3059\u3002\u5f53\u65b9\u306e\u3082\u306e\u3067\u306f\u306a\u304f\u3001\u540c\u68b1\u3082\u3057\u3066\u3044\u307e\u305b\u3093\u3002",
+        "ko": "\uc138\ub85c \ucc3d\uc744 \uc120\ud638\ud55c\ub2e4\uba74. \uac8c\uc784\uc5d0\ub294 \uadf8\ub7f0 \uc124\uc815\uc774 \uc5c6\uc5b4 "
+              "{tool} \uc774 \ud544\uc694\ud569\ub2c8\ub2e4. NowvaB \uac00 \ub9cc\ub4e0 \ubb34\ub8cc \uc18c\ud615 \ub3c4\uad6c\ub85c, "
+              "\uac8c\uc784 \ucc3d \ud06c\uae30\ub9cc \ubc14\uafc9\ub2c8\ub2e4. \uc800\ud76c \uac83\uc774 \uc544\ub2c8\uba70 \ud568\uaed8 "
+              "\ubc30\ud3ec\ud558\uc9c0\ub3c4 \uc54a\uc2b5\ub2c8\ub2e4.",
+        "de": "ein hohes Fenster, falls du das lieber magst. Das Spiel bietet das nicht an, "
+              "daf\u00fcr braucht es {tool}: ein kleines kostenloses Programm von NowvaB, das nur "
+              "die Fenstergr\u00f6\u00dfe \u00e4ndert. Es ist nicht von uns und liegt hier nicht bei."},
+    "A half-read line is recorded as a different item, not as a near miss.": {
+        "zh_tw": "\u8b80\u5230\u4e00\u534a\u7684\u884c\u6703\u88ab\u8a18\u6210\u53e6\u4e00\u500b\u9053\u5177\uff0c"
+                 "\u800c\u4e0d\u662f\u300c\u5dee\u4e00\u9ede\u300d\u3002",
+        "zh_cn": "\u8bfb\u5230\u4e00\u534a\u7684\u884c\u4f1a\u88ab\u8bb0\u6210\u53e6\u4e00\u4e2a\u9053\u5177\uff0c"
+                 "\u800c\u4e0d\u662f\u201c\u5dee\u4e00\u70b9\u201d\u3002",
+        "ja": "\u8aad\u307f\u304b\u3051\u306e\u884c\u306f\u3001\u60dc\u3057\u3044\u9593\u9055\u3044\u3067\u306f\u306a\u304f"
+              "\u5225\u306e\u30a2\u30a4\u30c6\u30e0\u3068\u3057\u3066\u8a18\u9332\u3055\u308c\u307e\u3059\u3002",
+        "ko": "\ub35c \uc77d\ud78c \uc904\uc740 \uc544\uae5d\uac8c \ube57\ub098\uac04 \uac83\uc774 \uc544\ub2c8\ub77c "
+              "\ub2e4\ub978 \uc544\uc774\ud15c\uc73c\ub85c \uae30\ub85d\ub429\ub2c8\ub2e4.",
+        "de": "Eine halb gelesene Zeile wird als ein anderer Gegenstand erfasst, nicht als "
+              "knappe Verfehlung."},
+    "With these on, a drop line appears complete instead of being drawn one character at a "
+    "time. That matters more than it sounds: this client reads whatever is on screen, and a "
+    "half-drawn line is read as a different item rather than as a near miss.": {
+        "zh_tw": "\u958b\u555f\u5f8c\uff0c\u6389\u843d\u8a0a\u606f\u6703\u6574\u884c\u76f4\u63a5\u51fa\u73fe\uff0c"
+                 "\u800c\u4e0d\u662f\u4e00\u500b\u5b57\u4e00\u500b\u5b57\u6162\u6162\u5beb\u51fa\u4f86\u3002\u9019\u6bd4\u60f3\u50cf\u4e2d\u91cd\u8981\uff1a"
+                 "\u672c\u5de5\u5177\u8b80\u7684\u5c31\u662f\u756b\u9762\u4e0a\u7576\u4e0b\u7684\u5167\u5bb9\uff0c"
+                 "\u800c\u53ea\u5beb\u5230\u4e00\u534a\u7684\u884c\u6703\u88ab\u8b80\u6210\u53e6\u4e00\u500b\u9053\u5177\uff0c\u800c\u4e0d\u662f\u300c\u5dee\u4e00\u9ede\u300d\u3002",
+        "zh_cn": "\u5f00\u542f\u540e\uff0c\u6389\u843d\u4fe1\u606f\u4f1a\u6574\u884c\u76f4\u63a5\u51fa\u73b0\uff0c"
+                 "\u800c\u4e0d\u662f\u4e00\u4e2a\u5b57\u4e00\u4e2a\u5b57\u6162\u6162\u5199\u51fa\u6765\u3002\u8fd9\u6bd4\u60f3\u8c61\u4e2d\u91cd\u8981\uff1a"
+                 "\u672c\u5de5\u5177\u8bfb\u7684\u5c31\u662f\u753b\u9762\u4e0a\u5f53\u4e0b\u7684\u5185\u5bb9\uff0c"
+                 "\u800c\u53ea\u5199\u5230\u4e00\u534a\u7684\u884c\u4f1a\u88ab\u8bfb\u6210\u53e6\u4e00\u4e2a\u9053\u5177\uff0c\u800c\u4e0d\u662f\u201c\u5dee\u4e00\u70b9\u201d\u3002",
+        "ja": "\u30aa\u30f3\u306b\u3059\u308b\u3068\u3001\u30c9\u30ed\u30c3\u30d7\u306e\u884c\u304c\u4e00\u6587\u5b57\u305a\u3064\u3067\u306f\u306a\u304f"
+              "\u4e00\u5ea6\u306b\u8868\u793a\u3055\u308c\u307e\u3059\u3002\u3053\u308c\u306f\u898b\u305f\u76ee\u4ee5\u4e0a\u306b\u91cd\u8981\u3067\u3059\u3002"
+              "\u3053\u306e\u30c4\u30fc\u30eb\u306f\u753b\u9762\u306b\u51fa\u3066\u3044\u308b\u3082\u306e\u3092\u305d\u306e\u307e\u307e\u8aad\u3080\u305f\u3081\u3001"
+              "\u63cf\u753b\u9014\u4e2d\u306e\u884c\u306f\u60dc\u3057\u3044\u9593\u9055\u3044\u3067\u306f\u306a\u304f\u5225\u306e\u30a2\u30a4\u30c6\u30e0\u3068\u3057\u3066\u8aad\u307e\u308c\u307e\u3059\u3002",
+        "ko": "\ucf1c \ub450\uba74 \ub4dc\ub86d \ubb38\uad6c\uac00 \ud55c \uae00\uc790\uc529\uc774 \uc544\ub2c8\ub77c \ud55c \ubc88\uc5d0 "
+              "\ud45c\uc2dc\ub429\ub2c8\ub2e4. \uc0dd\uac01\ubcf4\ub2e4 \uc911\uc694\ud569\ub2c8\ub2e4. \uc774 \ub3c4\uad6c\ub294 \ud654\uba74\uc5d0 "
+              "\ub098\uc628 \uadf8\ub300\ub85c\ub97c \uc77d\uae30 \ub54c\ubb38\uc5d0, \ub35c \uadf8\ub824\uc9c4 \uc904\uc740 \uc544\uae5d\uac8c "
+              "\ube57\ub098\uac04 \uac83\uc774 \uc544\ub2c8\ub77c \ub2e4\ub978 \uc544\uc774\ud15c\uc73c\ub85c \uc77d\ud799\ub2c8\ub2e4.",
+        "de": "Damit erscheint eine Fundzeile vollst\u00e4ndig, statt Zeichen f\u00fcr Zeichen "
+              "geschrieben zu werden. Das ist wichtiger, als es klingt: Dieser Client liest, "
+              "was gerade auf dem Bildschirm steht, und eine halb gezeichnete Zeile wird als "
+              "ein anderer Gegenstand gelesen statt als knappe Verfehlung."},
+    "Go on to the next step.": {
+        "zh_tw": "進行下一步。", "zh_cn": "进行下一步。",
+        "ja": "次のステップへ進みます。",
+        "ko": "다음 단계로 넘어갑니다.",
+        "de": "Weiter zum nächsten Schritt."},
+    "Close this window. Nothing is lost.": {
+        "zh_tw": "關閉這個視窗，不會遺失任何東西。", "zh_cn": "关闭这个窗口，不会丢失任何东西。",
+        "ja": "このウィンドウを閉じます。失われるものはありません。",
+        "ko": "이 창을 닫습니다. 잃는 것은 없습니다.",
+        "de": "Dieses Fenster schließen. Es geht nichts verloren."},
+    "Carry on without this picture. The step it was for is left unfitted.": {
+        "zh_tw": "不用這張圖繼續，這一步的校正就會留白。", "zh_cn": "不用这张图继续，这一步的校正就会留空。",
+        "ja": "この画像なしで進みます。その分の調整は行われません。",
+        "ko": "이 사진 없이 계속합니다. 해당 단계는 맞추지 않은 채로 남습니다.",
+        "de": "Ohne dieses Bild weitermachen. Der zugehörige Schritt bleibt ungefittet."},
+    "Use the picture already on disk from an earlier calibration instead of "
+    "taking a new one.": {
+        "zh_tw": "直接用先前校正時存下的圖，不重新截圖。", "zh_cn": "直接用先前校正时存下的图，不重新截图。",
+        "ja": "前回の調整で保存された画像を使い、撮り直しません。",
+        "ko": "이전 보정 때 저장된 사진을 그대로 사용하고 새로 찍지 않습니다.",
+        "de": "Das bereits gespeicherte Bild einer früheren Kalibrierung verwenden, "
+              "statt ein neues aufzunehmen."},
+    "Take the picture now. Set the game up first — this reads whatever is on "
+    "screen.": {
+        "zh_tw": "現在截圖。請先把遊戲畫面準備好——它讀的就是當下的畫面。", "zh_cn": "现在截图。请先把游戏画面准备好——它读的就是当下的画面。",
+        "ja": "今すぐ撮影します。先にゲーム画面を整えてください——写るのは今の画面です。",
+        "ko": "지금 촬영합니다. 게임 화면을 먼저 준비하세요 — 지금 화면 그대로 찍힙니다.",
+        "de": "Jetzt aufnehmen. Stelle das Spiel vorher ein — aufgenommen wird, was "
+              "gerade zu sehen ist."},
+    "Begin reading the game window. Chests and veins are recorded as they "
+    "happen.": {
+        "zh_tw": "開始讀取遊戲視窗。寶箱與採掘會即時記錄下來。", "zh_cn": "开始读取游戏窗口。宝箱与采掘会实时记录下来。",
+        "ja": "ゲームウィンドウの読み取りを開始します。宝箱と採掘はその場で記録されます。",
+        "ko": "게임 창 읽기를 시작합니다. 상자와 채굴은 그때그때 기록됩니다.",
+        "de": "Beginnt, das Spielfenster zu lesen. Truhen und Adern werden sofort "
+              "erfasst."},
+    "Say that the next chest belongs to a new dive, when the client cannot see "
+    "the change itself.": {
+        "zh_tw": "當程式看不出你換了一趟時，用它宣告下一個寶箱屬於新的一趟。", "zh_cn": "当程序看不出你换了一趟时，用它宣告下一个宝箱属于新的一趟。",
+        "ja": "潜り直しを自動で判断できないとき、次の宝箱が新しい探索のものだと伝えます。",
+        "ko": "클라이언트가 스스로 알아채지 못할 때, 다음 상자가 새 탐험의 것임을 알려 줍니다.",
+        "de": "Sagt, dass die nächste Truhe zu einem neuen Tauchgang gehört, wenn der "
+              "Client den Wechsel nicht selbst sieht."},
+    "Send what is waiting to the study. Nothing leaves this computer until you "
+    "press it.": {
+        "zh_tw": "把待上傳的資料送出。在你按下之前，什麼都不會離開這台電腦。", "zh_cn": "把待上传的数据送出。在你按下之前，什么都不会离开这台电脑。",
+        "ja": "未送信の記録を送ります。押すまで、このPCから何も出ていきません。",
+        "ko": "대기 중인 기록을 보냅니다. 누르기 전에는 이 컴퓨터에서 아무것도 나가지 않습니다.",
+        "de": "Sendet, was ansteht, an die Studie. Vorher verlässt nichts diesen "
+              "Computer."},
+    "Re-read your own records and redraw this page.": {
+        "zh_tw": "重新讀取你自己的紀錄並更新這一頁。", "zh_cn": "重新读取你自己的记录并更新这一页。",
+        "ja": "自分の記録を読み直し、このページを更新します。",
+        "ko": "내 기록을 다시 읽어 이 페이지를 새로 그립니다.",
+        "de": "Liest deine Aufzeichnungen neu und zeichnet diese Seite neu."},
+    "Teach the client to read a window size it does not already know. Existing "
+    "calibrations are kept.": {
+        "zh_tw": "教程式讀取它還不認得的視窗尺寸。既有的校正會保留。", "zh_cn": "教程序读取它还不认得的窗口尺寸。既有的校正会保留。",
+        "ja": "まだ知らないウィンドウサイズの読み方を覚えさせます。既存の調整は残ります。",
+        "ko": "아직 모르는 창 크기를 읽는 법을 가르칩니다. 기존 보정은 그대로 유지됩니다.",
+        "de": "Bringt dem Client eine Fenstergröße bei, die er noch nicht kennt. "
+              "Vorhandene Kalibrierungen bleiben erhalten."},
+    "Draw what the client is looking at on top of the game, so you can check "
+    "it is reading the right places.": {
+        "zh_tw": "把程式正在看的位置畫在遊戲畫面上，讓你確認它讀的地方對不對。", "zh_cn": "把程序正在看的位置画在游戏画面上，让你确认它读的地方对不对。",
+        "ja": "読み取り位置をゲーム画面に重ねて表示し、正しい場所を見ているか確認できます。",
+        "ko": "클라이언트가 보고 있는 위치를 게임 화면 위에 그려, 올바른 곳을 읽는지 확인할 수 있습니다.",
+        "de": "Zeichnet über das Spiel, worauf der Client schaut, damit du prüfen "
+              "kannst, ob er die richtigen Stellen liest."},
+    "Open the folder holding everything this client has kept.": {
+        "zh_tw": "打開存放本工具所有資料的資料夾。", "zh_cn": "打开存放本工具所有数据的文件夹。",
+        "ja": "このツールが保存したものが入っているフォルダーを開きます。",
+        "ko": "이 도구가 보관한 모든 것이 있는 폴더를 엽니다.",
+        "de": "Öffnet den Ordner mit allem, was dieser Client aufbewahrt."},
+    "Write your records to a CSV file you choose, to keep or to look at "
+    "elsewhere.": {
+        "zh_tw": "把你的紀錄輸出成 CSV 檔，方便保存或用其他工具查看。", "zh_cn": "把你的记录导出成 CSV 文件，方便保存或用其他工具查看。",
+        "ja": "記録を CSV に書き出します。保存や、他のツールで見るために。",
+        "ko": "기록을 CSV 파일로 저장해 보관하거나 다른 곳에서 볼 수 있습니다.",
+        "de": "Schreibt deine Aufzeichnungen in eine CSV-Datei deiner Wahl — zum "
+              "Aufbewahren oder Ansehen anderswo."},
+    "About": {
+        "zh_tw": "關於", "zh_cn": "关于", "ja": "このツールについて", "ko": "정보",
+        "de": "Über"},
+    "A fan-made tool. It is not made by, endorsed by, or connected to the makers of the "
+    "game.": {
+        "zh_tw": "本工具由玩家自行製作，並非遊戲官方作品，也未經官方認可或與其有任何關聯。",
+        "zh_cn": "本工具由玩家自行制作，并非游戏官方作品，也未经官方认可或与其有任何关联。",
+        "ja": "有志が作ったツールです。ゲームの制作元が作ったものではなく、公認でも、関係も"
+              "ありません。",
+        "ko": "팬이 만든 도구입니다. 게임 제작사가 만들거나 승인하거나 관련된 것이 아닙니다.",
+        "de": "Ein von Fans gemachtes Werkzeug. Es stammt nicht von den Machern des Spiels, "
+              "ist nicht von ihnen unterstützt und steht in keiner Verbindung zu ihnen."},
+    "landscape": {
+        "zh_tw": "橫向", "zh_cn": "横向", "ja": "横向き", "ko": "가로", "de": "quer"},
+    "portrait": {
+        "zh_tw": "直向", "zh_cn": "竖向", "ja": "縦向き", "ko": "세로", "de": "hoch"},
+    "not supported. At that size the game draws the names with too little detail to read "
+    "reliably, and a line this client cannot read is left out rather than guessed at.": {
+        "zh_tw": "不支援。在這個尺寸下，遊戲畫出的名稱細節太少，無法穩定辨識；"
+                 "而讀不出來的行會被略過，不會用猜的。",
+        "zh_cn": "不支持。在这个尺寸下，游戏画出的名称细节太少，无法稳定识别；"
+                 "而读不出来的行会被略过，不会用猜的。",
+        "ja": "非対応です。このサイズではアイテム名の描画が粗く、確実には読めません。"
+              "読めなかった行は推測せずに記録しません。",
+        "ko": "지원하지 않습니다. 이 크기에서는 이름이 너무 성기게 그려져 안정적으로 읽을 수 "
+              "없고, 읽지 못한 줄은 추측하지 않고 기록에서 빠집니다.",
+        "de": "nicht unterstützt. In dieser Größe zeichnet das Spiel die Namen mit zu wenig "
+              "Detail, um sie zuverlässig zu lesen — und eine Zeile, die dieser Client nicht "
+              "lesen kann, wird ausgelassen statt geraten."},
     "Veins: wait for the ▼.": {
         "zh_tw": "採掘點：等 ▼ 出現。", "zh_cn": "采掘点：等 ▼ 出现。",
         "ja": "採掘ポイント：▼ を待つ。", "ko": "채굴 포인트: ▼ 를 기다리세요.",
@@ -966,18 +1217,23 @@ STRINGS: dict[str, dict[str, str]] = {
     # The first thing a new player is sent to and the one step nobody can skip, so an
     # untranslated dialog here is the page that explains what to photograph being the page
     # they cannot read.
-    "Step 1 of 2 — stand in a dungeon with the minimap visible, then press Capture.\n"
-    "You will have a few seconds to switch back to the game.": {
-        "zh_tw": "步驟 1／2 — 站在地城中並讓小地圖可見，然後按「擷取」。\n"
-                 "你會有幾秒鐘切換回遊戲。",
-        "zh_cn": "步骤 1／2 — 站在地下城中并让小地图可见，然后按“截取”。\n"
-                 "你会有几秒钟切换回游戏。",
-        "ja": "ステップ 1／2 — ミニマップが見える状態でダンジョンに立ち、「撮影」を押します。\n"
-              "ゲームに戻るまで数秒あります。",
-        "ko": "1／2 단계 — 미니맵이 보이는 상태로 던전에 서서 「촬영」을 누르세요.\n"
-              "게임으로 돌아갈 시간이 몇 초 있습니다.",
-        "de": "Schritt 1 von 2 — stell dich mit sichtbarer Minikarte in einen Dungeon und "
-              "drücke Aufnehmen.\nDu hast ein paar Sekunden, um ins Spiel zurückzuwechseln."},
+    # KEEP WALKING is an instruction, not flavour: the shots are compared with each other to
+    # find the part of the minimap panel that does not change, and standing still makes the
+    # map interior — the one part that must never be matched — look just as steady as the
+    # buttons under it.
+    "Step 1 of 2 — walk around a dungeon with the minimap visible, then press Capture.\n"
+    "You will have a few seconds to switch back — keep walking while it takes the shots.": {
+        "zh_tw": "步驟 1／2 — 在地城中走動並讓小地圖可見，然後按「擷取」。\n"
+                 "你會有幾秒鐘切換回遊戲 — 拍攝期間請持續走動。",
+        "zh_cn": "步骤 1／2 — 在地下城中走动并让小地图可见，然后按“截取”。\n"
+                 "你会有几秒钟切换回游戏 — 拍摄期间请持续走动。",
+        "ja": "ステップ 1／2 — ミニマップが見える状態でダンジョンを歩き、「撮影」を押します。\n"
+              "ゲームに戻るまで数秒あります — 撮影中は歩き続けてください。",
+        "ko": "1／2 단계 — 미니맵이 보이는 상태로 던전을 걸어 다니며 「촬영」을 누르세요.\n"
+              "게임으로 돌아갈 시간이 몇 초 있습니다 — 촬영하는 동안 계속 걸어 주세요.",
+        "de": "Schritt 1 von 2 — lauf mit sichtbarer Minikarte durch einen Dungeon und drücke "
+              "Aufnehmen.\nDu hast ein paar Sekunden zum Zurückwechseln — lauf weiter, "
+              "während die Aufnahmen entstehen."},
     "Step 2 of 2 — open a chest and leave the 「…を手に入れた!!」 message on screen, then "
     "press Capture.": {
         "zh_tw": "步驟 2／2 — 打開寶箱，讓「…を手に入れた!!」訊息留在畫面上，然後按「擷取」。",

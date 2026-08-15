@@ -236,8 +236,7 @@ def stylesheet() -> str:
     }}
     /* The name, in the display face and the brightest ink the ribbon uses. It sits on the
        same row as the navigation, so it has to read as a heading and not as a fifth thing
-       that can be clicked — hence the weight, and the muted 「非官方」 immediately after it,
-       which is small on purpose but never hidden. */
+       that can be clicked — hence the weight. */
     QLabel#wordmark {{
         font-family: {DISPLAY};
         font-size: 15px;

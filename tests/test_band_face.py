@@ -182,6 +182,9 @@ def test_a_speck_of_wall_is_not_a_drop_line(monkeypatch):
 
     runner = CaptureRunner.__new__(CaptureRunner)
     runner.profile = SimpleNamespace(message_band=(0, 22), window=(749, 51), offset=(0, 0))
+    # The synthetic frame IS the band, with no dialogue box around it to bound — which is
+    # what an un-fitted profile gives the real runner too, and it must still read.
+    runner.columns = None
     runner.stats = {"skipped_blank": 0, "skipped_same": 0, "skipped_animating": 0}
     runner._pending = None
     runner._last_mask = None

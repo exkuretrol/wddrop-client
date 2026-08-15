@@ -38,6 +38,43 @@ class FrameSource(Protocol):
     def frames(self) -> Iterator[Frame]: ...
 
 
+def resample(image, to_size):
+    """Bring a frame back to the size its calibration was made at.
+
+    BOX when the scale is a whole number, which is exactly the 4K case: 3840x2160 -> 1920x1080
+    averages each 2x2 block, which is what the compositor's enlargement did in reverse.
+    LANCZOS otherwise, for 2560x1440 and anything else that lands between pixels.
+    """
+    from PIL import Image
+
+    width, height = image.size
+    if (width, height) == tuple(to_size):
+        return image
+    scale = width / to_size[0]
+    exact = abs(scale - round(scale)) < 1e-6
+    return image.resize(tuple(to_size), Image.BOX if exact else Image.LANCZOS)
+
+
+class ScaledSource:
+    """Frames that arrive larger than the calibration, resampled back down to it.
+
+    For a source that hands over whole frames — a recording made on a 4K screen, a still, a
+    clip. Live capture does NOT go through this: it grabs strips rather than whole frames,
+    so it scales each strip at the grab instead (see ScreenSource.scale), which is both
+    cheaper and exactly equivalent.
+    """
+
+    def __init__(self, inner: "FrameSource", to_size: tuple[int, int]):
+        self.inner = inner
+        self.to_size = (int(to_size[0]), int(to_size[1]))
+
+    def frames(self) -> Iterator[Frame]:
+        from dataclasses import replace
+
+        for frame in self.inner.frames():
+            yield replace(frame, image=resample(frame.image, self.to_size))
+
+
 class FramesDirSource:
     """Replay a directory of PNGs, in filename order, at a nominal frame rate.
 
@@ -134,7 +171,8 @@ class ScreenSource:
                  region: tuple[int, int, int, int] | None = None,
                  window_title: str | None = None, follow_window: bool = False,
                  strips: list[tuple[int, int, int, int]] | None = None,
-                 expect_size: tuple[int, int] | None = None):
+                 expect_size: tuple[int, int] | None = None,
+                 profile_size: tuple[int, int] | None = None):
         self.monitor = monitor
         self.fps = fps
         self.region = region      # (left, top, width, height) in screen coordinates
@@ -152,6 +190,13 @@ class ScreenSource:
         # The calibrated size, used to disambiguate windows. Weaker than the process name but
         # far stronger than a title substring.
         self.expect_size = expect_size
+        # WHEN THE WINDOW IS AN ENLARGEMENT OF THE CALIBRATION — a borderless-fullscreen game
+        # rendering 1920x1080 onto a 2560x1440 or 4K desktop; see calibration.scaled_from.
+        # Every region below is in the PROFILE's pixels, so the scale is applied at the grab:
+        # each strip is asked for at its enlarged position and resampled back on arrival. The
+        # canvas stays profile-sized, so nothing downstream can tell the difference — and the
+        # cheap part stays cheap, since a strip is still the only thing read off the screen.
+        self.profile_size = tuple(profile_size) if profile_size else None
 
     def _follow(self, handle: int, box: dict) -> dict:
         """Where the window is NOW, keeping the size capture started at.
@@ -209,18 +254,29 @@ class ScreenSource:
             while True:
                 if handle is not None:
                     box = self._follow(handle, box)
+                canvas = self.profile_size or (box["width"], box["height"])
+                kx = box["width"] / canvas[0]
+                ky = box["height"] / canvas[1]
                 if self.strips:
-                    img = Image.new("L", (box["width"], box["height"]), 0)
+                    img = Image.new("L", canvas, 0)
                     for (sl, st, sw, sh) in self.strips:
-                        sub = sct.grab({"left": box["left"] + sl, "top": box["top"] + st,
-                                        "width": sw, "height": sh})
-                        img.paste(
-                            Image.frombytes("RGB", sub.size, sub.bgra, "raw", "BGRX").convert("L"),
-                            (sl, st),
-                        )
+                        # Rounded OUTWARD, so a strip never comes back a pixel short of the
+                        # region it stands for: the band's own edges are what the reader
+                        # anchors on.
+                        gl, gt = int(sl * kx), int(st * ky)
+                        gw = max(1, int(round((sl + sw) * kx)) - gl)
+                        gh = max(1, int(round((st + sh) * ky)) - gt)
+                        sub = sct.grab({"left": box["left"] + gl, "top": box["top"] + gt,
+                                        "width": gw, "height": gh})
+                        cut = Image.frombytes("RGB", sub.size, sub.bgra, "raw", "BGRX").convert("L")
+                        if (gw, gh) != (sw, sh):
+                            cut = resample(cut, (sw, sh))
+                        img.paste(cut, (sl, st))
                 else:
                     shot = sct.grab(box)
                     img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+                    if img.size != tuple(canvas):
+                        img = resample(img, canvas)
                 yield Frame(t=time.monotonic() - start, image=img)
                 # Sleep the remainder of the interval so the loop paces itself rather than
                 # spinning; capture cost varies with resolution.
@@ -258,9 +314,20 @@ def _window_source(title: str | None, fps: float,
         return None
 
 
+def _to_profile(source: "FrameSource", profile_size) -> "FrameSource":
+    """Resample whole frames down to the calibrated size, when they arrive larger.
+
+    A no-op both when nothing was asked for and when the frames already match — the check is
+    a tuple compare per frame, and the alternative is every caller having to know whether its
+    particular source scales itself.
+    """
+    return ScaledSource(source, profile_size) if profile_size else source
+
+
 def open_source(spec: str, fps: float = 4.0,
                 strips: list[tuple[int, int, int, int]] | None = None,
-                expect_size: tuple[int, int] | None = None) -> FrameSource:
+                expect_size: tuple[int, int] | None = None,
+                profile_size: tuple[int, int] | None = None) -> FrameSource:
     """Build a source from a CLI-friendly string.
 
         window            follow the game window (default for live capture)
@@ -275,12 +342,15 @@ def open_source(spec: str, fps: float = 4.0,
         title = spec.split(":", 1)[1] if ":" in spec else None
         window = _window_source(title, fps, strips, expect_size)
         if window is not None:
-            return window
+            # The compositor hands this path the whole window either way, so it is resampled
+            # whole. The screen path below scales each strip at the grab instead — same
+            # result, but it never moves the pixels it does not read.
+            return _to_profile(window, profile_size)
         return ScreenSource(fps=fps, window_title=title, follow_window=True, strips=strips,
-                            expect_size=expect_size)
+                            expect_size=expect_size, profile_size=profile_size)
     if spec == "screen" or spec.startswith("screen:"):
         monitor = int(spec.split(":", 1)[1]) if ":" in spec else 1
-        return ScreenSource(monitor=monitor, fps=fps, strips=strips)
+        return ScreenSource(monitor=monitor, fps=fps, strips=strips, profile_size=profile_size)
 
     # PowerShell tab-completion leaves a trailing separator on directories, and `frames\`
     # is the form the docs use; strip it so the path resolves either way.
@@ -294,11 +364,11 @@ def open_source(spec: str, fps: float = 4.0,
                 f"    Split a clip into it first:\n"
                 f"        ffmpeg -i clip.mp4 -vf fps={fps:g} {path}\\f_%05d.png"
             )
-        return FramesDirSource(path, fps=fps)
+        return _to_profile(FramesDirSource(path, fps=fps), profile_size)
     if path.is_file():
         if path.suffix.lower() in IMAGE_SUFFIXES:
-            return ImageSource(path, fps=fps)
-        return VideoSource(path, fps=fps)
+            return _to_profile(ImageSource(path, fps=fps), profile_size)
+        return _to_profile(VideoSource(path, fps=fps), profile_size)
 
     raise SystemExit(
         f"[!] frame source not found: {spec!r}\n"

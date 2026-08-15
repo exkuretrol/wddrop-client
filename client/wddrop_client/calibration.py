@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path, PurePosixPath
 
 log = logging.getLogger("wddrop.calibration")
@@ -43,6 +43,162 @@ ROW_GAP_TOLERANCE = 6
 # Plausible rendered heights for a dialogue line, as a fraction of frame height. Guards
 # against locking onto a HUD strip or a full-screen panel.
 MIN_BAND_FRACTION, MAX_BAND_FRACTION = 0.010, 0.060
+
+
+# How far outside the dialogue box to still read, in pixels. Enough for the box's own border
+# and a glyph that overhangs its cell; not enough to reach the scenery.
+READ_MARGIN = 24
+
+# THE GAME'S OWN LAYOUT, READ OUT OF THE GAME (Steam build, WizardryVariantsDaphne_Data,
+# level1..level11, the CanvasScaler on the UI Canvas):
+#
+#     m_UiScaleMode          1   ScaleWithScreenSize
+#     m_ReferenceResolution  1080 x 1920
+#     m_ScreenMatchMode      1   Expand
+#
+# Expand means scale = MIN(width/1080, height/1920), so every UI element is a fixed size in
+# CANVAS UNITS and its pixel size follows that one number. Nothing here needs to be fitted
+# per resolution, and nothing has to be guessed for a resolution nobody has recorded: the
+# canvas is 1920 units tall on any screen wider than 9:16, and 1080 units wide on any screen
+# narrower than that.
+#
+# Confirmed against both recorded resolutions before being relied on — see PANEL_BOX_UNITS.
+UI_REFERENCE = (1080.0, 1920.0)
+
+
+def ui_scale(frame_size) -> float:
+    """Canvas units -> pixels, for this screen. See UI_REFERENCE."""
+    width, height = float(frame_size[0]), float(frame_size[1])
+    return min(width / UI_REFERENCE[0], height / UI_REFERENCE[1])
+
+
+# The mining result panel's box, in canvas units. Measured three independent ways and they
+# agree to a unit, which is what makes the scaling law above trustworthy rather than fitted:
+#
+#     1920x1080  panel edges x637-1281      644px / 0.5625 = 1145 units
+#      704x1241  the panel is CLIPPED by the screen — 1144 units is 740px on a 704px screen,
+#                and it is drawn full-bleed, which is exactly what the recording shows
+#     the ▼      sits 58px inside the right edge at 1080 and 67px at 704: 103 and 104 units
+#
+# That last one is the strong evidence. At 704x1241 the panel's right edge is off-screen, so
+# the marker's position can only be predicted from the box the game THINKS it is drawing —
+# and it is where this model says it is.
+PANEL_BOX_UNITS = 1144.0
+
+# A CAPTURED FRAME THAT IS A SCALED COPY OF A CALIBRATED ONE
+# ----------------------------------------------------------
+# The game's fullscreen is always BORDERLESS, and nothing outside it can change that: the
+# mode it asks Windows for is fixed, so `-window-mode exclusive` and the stored preference
+# are both overwritten the moment it applies its own display settings. Borderless means the
+# WINDOW is the size of the desktop while the render stays at the resolution the player
+# chose, so the compositor scales it: a 1920x1080 game on a 2560x1440 screen is captured at
+# 2560x1440, and on a 4K screen at 3840x2160.
+#
+# Every region in a profile is absolute pixels, so such a frame matches nothing — but it is
+# not a DIFFERENT picture, it is the same picture enlarged. Resampled back down it reads
+# almost as well as the native one. Measured over 15 confirmed chest lines at 1920x1080,
+# round-tripped through each display size and read with the shipped fit:
+#
+#     native 1920x1080          mean 0.9055   min 0.8632
+#     via 2560x1440 (4/3)       mean 0.8905   min 0.8473    0 names changed
+#     via 3840x2160 (2x)        mean 0.8885   min 0.8450    0 names changed
+#
+# ~0.016 against a 0.60 gate. So the scale is worth undoing rather than refusing, and worth
+# undoing rather than calibrating for: the enlarged ink is blurred while the templates stay
+# crisp, and no fit can recover what the upscale smeared.
+#
+# Only DOWN. A capture smaller than a calibration is not the same picture at all — it holds
+# less than the fit needs, and enlarging it would invent detail and read confidently from it.
+MAX_CAPTURE_SCALE = 4.0
+# How far the two axes may disagree before this stops being a uniform scale. A pixel of
+# rounding at 4K is 0.0005 of the width; anything past this is a different aspect ratio,
+# which means letterboxing or stretching and is refused rather than guessed at.
+SCALE_TOLERANCE = 0.005
+
+
+def scaled_from(captured, calibrated) -> tuple[tuple[int, int], float] | None:
+    """Which calibrated size `captured` is an enlargement of, and by how much.
+
+    Returns (size, scale) or None. `calibrated` is any iterable of (w, h).
+
+    Ties are broken toward the LARGEST calibrated size that fits, i.e. the smallest scale:
+    it is the one that threw away least, and at 4K both 1920x1080 (2x) and 704x1241 would
+    otherwise be candidates on aspect alone.
+    """
+    if not captured:
+        return None
+    width, height = int(captured[0]), int(captured[1])
+    best = None
+    for size in calibrated:
+        if not size:
+            continue
+        cw, ch = int(size[0]), int(size[1])
+        if cw <= 0 or ch <= 0 or (cw, ch) == (width, height):
+            continue
+        sx, sy = width / cw, height / ch
+        if sx < 1.0 or sy < 1.0 or sx > MAX_CAPTURE_SCALE or sy > MAX_CAPTURE_SCALE:
+            continue
+        if abs(sx - sy) > SCALE_TOLERANCE * max(sx, sy):
+            continue                      # a different aspect: letterboxed or stretched
+        scale = (sx + sy) / 2.0
+        if best is None or scale < best[1]:
+            best = ((cw, ch), scale)
+    return best
+
+
+def read_columns(profile) -> tuple[int, int] | None:
+    """The columns the message band is written in — everything outside is scenery.
+
+    THE BOX IS CENTRED AND THE TEXT IS LEFT-ALIGNED IN IT, so one measured number describes
+    both edges: the box reaches as far right of the centre as `text_x0` sits left of it.
+    Verified on both fitted resolutions — 704x1241 has text_x0 93 and wraps at 611, and
+    1920x1080 has 732 and wraps at 1188, each the mirror of the other to a pixel. In canvas
+    units both are the same box: 801 and 811 units of text.
+
+    Measured rather than derived because it CAN be measured here — calibration reads a real
+    drop line on this machine, and a number taken from the player's own screen beats one
+    taken from a prefab. The mining panel has no such measurement, which is what
+    `panel_columns` is for.
+
+    It matters twice, and the second time is not about speed:
+
+      * capture copies these columns instead of the full width, which at 1920x1080 is a
+        quarter of the pixels it was moving per frame;
+      * the band's key covered the whole row, so on a whole frame the scenery either side
+        changed it every frame and the line never counted as held still.
+
+    None when the profile predates `text_x0` or the number is nonsense (at or past the
+    centre), in which case every caller falls back to the full width it used before.
+    """
+    x0 = getattr(profile, "text_x0", None)
+    size = getattr(profile, "frame_size", None)
+    if not x0 or not size:
+        return None
+    width = int(size[0])
+    if x0 * 2 >= width:
+        return None
+    return max(0, int(x0) - READ_MARGIN), min(width, width - int(x0) + READ_MARGIN)
+
+
+def panel_columns(profile) -> tuple[int, int] | None:
+    """The columns the MINING PANEL can draw in. A different box from the message band's.
+
+    Wider, and that is the point: at 1920x1080 the message band's text is 504 columns and the
+    panel is 644, so reading the panel between the band's columns cuts 70 pixels off each
+    end — which is where the ▼ advance marker lives (x1217-1229 of a box ending at 1281).
+    The marker is the game SAYING the panel is finished, and without it a swing dismissed
+    inside two frames is never read at all.
+
+    Centred, and clipped to the screen: at 704x1241 the box is 740px wide on a 704px screen
+    and the game simply lets it bleed off both sides.
+    """
+    size = getattr(profile, "frame_size", None)
+    if not size:
+        return None
+    width = int(size[0])
+    box = PANEL_BOX_UNITS * ui_scale(size)
+    left = max(0, int(round((width - box) / 2)))
+    return left, min(width, width - left)
 
 
 @dataclass
@@ -88,6 +244,12 @@ class Profile:
     # that wrong would not fail loudly — it would read plausible wrong item names.
     panel_font_size: int | None = None
     panel_letter_spacing: float | None = None
+    # The panel's own TYPEFACE, which is not always the band's: the game ships a scenario
+    # twin of its UI font and the two readers do not have to be drawn in the same one. At
+    # 1920x1080 the band fits the scenario face and the panel is drawn in the plain one, and
+    # reading the panel in the band's face scores 0.726 where the right face scores 0.905 —
+    # so nothing in a mining panel was read at all. See runner._panel_faces.
+    panel_font_path: str | None = None
     panel_data_version: str | None = None
     notes: dict = field(default_factory=dict)
 
@@ -121,6 +283,33 @@ class Profile:
             f"    Looked for {name} beside the profile and in .\\fonts.\n"
             f"    Re-run `calibrate`, or restore the fonts folder."
         )
+
+    def resolve_panel_font(self, near: str | Path | None = None) -> str | None:
+        """The MINING PANEL's typeface, tolerating a moved folder — or None if it is not here.
+
+        The same search as `resolve_font`, for the same reason, and it matters more here than
+        it looks: the runner takes the stored panel face only when the file EXISTS, so an
+        absolute path from another machine silently falls back to the band's face — which at
+        1920x1080 reads the panel at 0.726 where its own face reads 0.905, i.e. nothing in a
+        mining panel is read at all. A SHIPPED profile carries a bare filename precisely so
+        that it resolves on a machine that has never seen the folder it was fitted in.
+
+        None rather than an exit: a profile fitted before the face was is a profile with no
+        answer here, and the fit simply runs again.
+        """
+        stored = getattr(self, "panel_font_path", None)
+        if not stored:
+            return None
+        from .config import bundled_dir, data_dir, program_dir
+
+        name = PurePosixPath(str(stored).replace("\\", "/")).name
+        roots = [Path(near) if near else None, Path.cwd(), data_dir(), program_dir(),
+                 bundled_dir()]
+        candidates = [Path(stored)] + [root / name for root in filter(None, roots)]
+        for c in candidates:
+            if c.exists():
+                return str(c)
+        return None
 
     @staticmethod
     def _coerce(raw: dict) -> dict:
@@ -204,6 +393,11 @@ class ProfileStore:
 
     def get(self, size) -> "Profile | None":
         return self._profiles.get(self.key_for(size))
+
+    def sizes(self) -> list[tuple[int, int]]:
+        """Every frame size this store has a fit for, as (w, h) — for asking whether a
+        captured frame is an enlargement of one of them. See `scaled_from`."""
+        return [tuple(p.frame_size) for p in self._profiles.values() if p.frame_size]
 
     def put(self, profile: "Profile") -> None:
         self._profiles[self.key_for(profile.frame_size)] = profile
@@ -419,6 +613,96 @@ def propose_item_name(
     return match.name, match.score, match.margin
 
 
+# How far from the fitted geometry to look for one that SEPARATES better, and how close two
+# scores have to be before separation is allowed to decide between them.
+SHARPEN_SIZES = 1
+# THE WHOLE PLAUSIBLE RANGE, not a neighbourhood of the spacing already chosen. The right
+# spacing at a DIFFERENT size is nowhere near the one at this size — they trade off against
+# each other, which is the whole reason the first pass cannot separate 18px from 19px — and
+# on the shot this was written for the two optima are +0.9 and -0.2, over a whole point
+# apart. Searching +-0.4 around the incumbent could never have found it.
+SHARPEN_SPACINGS = [round(step / 10.0, 1) for step in range(-6, 21)]
+
+
+def _sharpened(gray, band, text_x0, font, offset, prefix, name, rivals, window,
+               size: int, spacing: float, suffix: str, separator: str):
+    from .capture.glyph import anchor_window, make_renderer, mask_after_name, zncc
+    """The (size, spacing) near this one that tells `name` from its closest rivals best.
+
+    THE FIT CHOOSES BY SCORE, AND SCORE IS NOT WHAT RECOGNITION NEEDS. Two geometries can sit
+    within a few thousandths of each other on the confirmed name and be worlds apart on
+    whether that name can be told from the four others in its family — and the second is the
+    property every later reading depends on.
+
+    Measured on a real 1600x900 calibration shot, same face, same window:
+
+        18px +0.9   score 0.8226   margin over the family +0.0222   <- chosen by score
+        19px -0.2   score 0.8180   margin over the family +0.0302   <- chosen here
+
+    A rounding difference in score, and the geometry the score preferred could not read
+    「10,000バイン紙幣」 at all: 0.5982 against a 0.60 gate, where the other reads it at
+    0.7979. That was a whole chest, missing from a session, with nothing in the log to say
+    why — the line simply scored under the bar.
+
+    Names written in ASCII digits are where this shows, because their advances differ most
+    from the atlas's; a CJK-only calibration shot cannot see it, and most are CJK-only.
+    """
+    best = None
+    for candidate_size in range(size - SHARPEN_SIZES, size + SHARPEN_SIZES + 1):
+        if candidate_size < 8:
+            continue
+        for candidate_spacing in SHARPEN_SPACINGS:
+            renderer = make_renderer(font, candidate_size, window, candidate_spacing)
+            observed = anchor_window(gray, band, window, x0_fixed=text_x0)
+            if observed is None:
+                continue
+            named, _cut = mask_after_name(observed, renderer, suffix, separator)
+            import numpy as np
+
+            def scored(text):
+                template = renderer.render(prefix + text)
+                return max(zncc(np.roll(np.roll(named, -dy, 0), -dx, 1), template)
+                           for dy in range(-2, 3) for dx in range(-2, 3))
+            mine = scored(name)
+            rival = max((scored(other) for other in rivals if other != name), default=0.0)
+            # RANKED BY THE MASKED SCORE, with the margin as the tie-break. The first pass
+            # ranks by a score taken over the whole line in a fixed 380px window; this one
+            # scores the NAME's own pixels in the window the runner will use, which is the
+            # comparison every later reading makes. On the shot this was written for the two
+            # disagree: the first pass has 18px +0.9 at 0.8226 and 19px -0.2 at 0.8180 — a
+            # rounding apart — while masked, at each size's own best spacing, 19px reads the
+            # calibration name at 0.8133 against 18px's 0.7872 AND the digit name at 0.8536
+            # against 0.6646. Size is what the first pass cannot see, because a smaller size
+            # with more spacing fits a CJK-only name just as well.
+            if best is None or (mine, mine - rival) > (best[1], best[0]):
+                best = (mine - rival, mine, candidate_size, candidate_spacing)
+    return best
+
+
+def _with_the_tie_broken(match, named, renderer, prefix, confirmed_name, offset):
+    """`match`, accepted on the columns the top two differ in when the whole line cannot.
+
+    THE CHECK MUST NOT BE STRICTER THAN THE READER IT CHECKS. `recognize` alone refuses a
+    thin margin and the runner does not: it hands the top two to `break_tie`. Junk families
+    are exactly where that matters — 「北穿の幽霊城の妖なる四鱗のガラクタ」 against 「…冥刻…」 —
+    and a player whose calibration chest happened to hold one could not calibrate at all, at
+    any resolution, while the client would have read that same line correctly every time.
+
+    Returns (match, what the tie-break measured) — the second is None when it was not needed.
+    """
+    if match.name == confirmed_name or not (match.best and match.runner_up):
+        return match, None
+    from .capture.glyph import break_tie, centred_shifts
+
+    winner, tie_margin, fit = break_tie(named, renderer, prefix, match.best, match.runner_up,
+                                        shifts=centred_shifts(offset, 1))
+    if (winner == confirmed_name and tie_margin >= SELF_CHECK_TIE_MARGIN
+            and fit >= SELF_CHECK_TIE_MIN_SCORE):
+        return replace(match, name=winner, accepted=True), (round(tie_margin, 4),
+                                                            round(fit, 4))
+    return match, None
+
+
 def fit_message_profile(
     frame,
     confirmed_name: str,
@@ -449,8 +733,8 @@ def fit_message_profile(
     import numpy as np
 
     from .capture.glyph import (
-        MAX_QUANTITY, RenderRecognizer, _text_left, anchor_window, calibrate, centred_shifts,
-        ink_bbox, make_renderer, mask_after_name, required_window,
+        MAX_QUANTITY, MIN_MARGIN, RenderRecognizer, _text_left, anchor_window, calibrate,
+        centred_shifts, ink_bbox, make_renderer, mask_after_name, required_window,
     )
 
     def np_asarray(img):
@@ -530,6 +814,56 @@ def fit_message_profile(
     observed = anchor_window(gray, band, window, x0_fixed=text_x0)
     named, cut = mask_after_name(observed, renderer, suffix, separator)
     match = recognizer.recognize(named)
+    # THE CHECK MUST NOT BE STRICTER THAN THE READER IT CHECKS. `recognize` alone refuses a
+    # thin margin, and the runner does not: it hands the top two to `break_tie`, which
+    # compares only the columns where they differ. Junk families are exactly where that
+    # matters — 「北穿の幽霊城の妖なる四鱗のガラクタ」 against 「…冥刻…」 — and a player whose
+    # calibration chest happened to hold one could not calibrate at all, at any resolution,
+    # while the client would have read that same line correctly every time.
+    #
+    # Measured on the 1600x900 shot this was written for: the fit scored 0.823 and the
+    # self-check returned None at margin 0.0183; the tie-break separates the same two
+    # candidates by 0.28 at fit 0.90.
+    match, tie_used = _with_the_tie_broken(match, named, renderer, prefix, confirmed_name,
+                                          offset)
+    # A GEOMETRY THAT READS THIS NAME IS NOT YET A GEOMETRY THAT TELLS IT FROM ITS FAMILY.
+    # When the self-check needed the tie-break to get there, the fit is sitting on a score
+    # that another geometry matches within a rounding error while separating far better —
+    # and separation is what every later reading depends on. See _sharpened for the shot
+    # that cost a chest.
+    if match.name == confirmed_name and match.margin < MIN_MARGIN and match.shortlist:
+        sharper = _sharpened(gray, band, text_x0, font, offset, prefix, confirmed_name,
+                             list(match.shortlist), window, size, spacing, suffix, separator)
+        if sharper and (sharper[2], sharper[3]) != (size, spacing):
+            new_size, new_spacing = sharper[2], sharper[3]
+            log.info("wddrop: %dpx %+.1f separates it better than %dpx %+.1f "
+                     "(margin %+.4f against %+.4f); re-checking there",
+                     new_size, new_spacing, size, spacing, sharper[0], match.margin)
+            # THE WINDOW IS SIZED FOR THE NEW GEOMETRY, not carried over. It holds the
+            # longest candidate plus its tail at a given size, and a larger size needs more
+            # of it — reusing the old one would truncate exactly the longest names.
+            new_window = required_window(
+                make_renderer(font, new_size, (1600, 80), new_spacing), prefix, vocabulary,
+                tail_sample=f"{separator}{MAX_QUANTITY}{suffix}" if suffix else None)
+            candidate_renderer = make_renderer(font, new_size, new_window, new_spacing)
+            candidate_index = RenderRecognizer(candidate_renderer, prefix, vocabulary,
+                                               shifts=centred_shifts(offset, 1))
+            candidate_obs = anchor_window(gray, band, new_window, x0_fixed=text_x0)
+            candidate_named, candidate_cut = mask_after_name(
+                candidate_obs, candidate_renderer, suffix, separator)
+            candidate = candidate_index.recognize(candidate_named)
+            candidate, candidate_tie = _with_the_tie_broken(
+                candidate, candidate_named, candidate_renderer, prefix, confirmed_name,
+                offset)
+            # ADOPTED ONLY IF IT STILL READS THE SHOT, with more room than before. The fit
+            # this replaces passed its own check; a replacement that does not is not better.
+            if candidate.best == confirmed_name and candidate.margin > match.margin:
+                size, spacing, window = new_size, new_spacing, new_window
+                renderer, match, cut = candidate_renderer, candidate, candidate_cut
+                tie_used = candidate_tie
+                profile.font_size, profile.letter_spacing = size, spacing
+                profile.window = window
+
     profile.notes = {
         "self_check_name": match.name,
         "self_check_score": round(match.score, 4),
@@ -541,17 +875,36 @@ def fit_message_profile(
         "window": list(window),
         "letter_spacing": spacing,
         "text_x0": text_x0,
+        # Present only when the whole line could not separate the top two and the columns
+        # they differ in did. Worth seeing in a profile: it says this fit was checked the
+        # harder way, on a name whose family is close.
+        **({"self_check_tie": tie_used} if tie_used else {}),
     }
     if match.name != confirmed_name:
+        # WHAT IT NEARLY READ, not just that it refused. The commonest cause is a name typed
+        # from memory — 「北穿の幽霊城の四鱗のガラクタ」 for a shot that says 「…の妖なる四鱗
+        # …」 — and the closest candidate says so at a glance, where a bare None sends
+        # somebody looking for a fault in the fit.
+        near = f"{match.best!r}" if match.best else "nothing"
+        if match.runner_up:
+            near += f" (then {match.runner_up!r})"
         raise ValueError(
             f"calibration failed its own check: fitted band {band} font {size}px scored "
             f"{score:.3f}, but recognition returned {match.name!r} instead of "
-            f"{confirmed_name!r} (margin {match.margin:.4f}). Refusing to save a profile "
-            f"that cannot read the frame it was built from."
+            f"{confirmed_name!r} (margin {match.margin:.4f}). The closest reading was "
+            f"{near} — if that is what the shot says, use it as the name. Refusing to save "
+            f"a profile that cannot read the frame it was built from."
         )
     log.info("wddrop: calibrated band=%s size=%dpx offset=%s spacing=%+.1f score=%.3f",
              band, size, offset, spacing, score)
     return profile
+
+
+# The self-check's tie-break gates, which are the RUNNER's — see MINING_TIE_* in runner.py.
+# Set apart from it only because calibration cannot import the runner without dragging the
+# capture loop in behind it.
+SELF_CHECK_TIE_MARGIN = 0.10
+SELF_CHECK_TIE_MIN_SCORE = 0.60
 
 
 # Where to look for the minimap panel, and how big it plausibly is. Searched rather than
@@ -696,22 +1049,188 @@ def decode_template(profile: "Profile"):
     return None
 
 
+# Bands to consider for the template, as fractions of the frame. Wider than tall: the chrome
+# is a BAR under the map, and a band deep enough to reach into the map interior carries the
+# part that redraws.
+HUD_BAND_SHAPES = ((0.08, 0.035), (0.09, 0.05), (0.10, 0.07), (0.12, 0.09))
+# A band must look the same on ANOTHER walking frame — that is the whole job of the template
+# and the only property a single screenshot cannot show. Measured at 1920x1080 over two
+# walking frames taken in different corridors: the icon bar under the map scores 0.694, the
+# map interior the old search chose scores 0.221, and the run it produced matched 0 frames
+# in 135.
+HUD_MIN_STABILITY = 0.45
+# ...and must NOT look like the frame with no HUD in it. The drop shot is exactly that frame
+# and calibration already has it. 0.15 keeps a comfortable gap under any threshold worth
+# setting: the icon bar scores -0.03 against the drop shot, the map's top edge +0.26.
+HUD_MAX_LEAK = 0.15
+# Where the threshold is allowed to land once both scores are known. The floor exists because
+# a threshold fitted from one pair of frames is a thin measurement; the ceiling because 0.60
+# was a guess that no correct region at 1920x1080 could clear.
+HUD_THRESHOLD_FLOOR, HUD_THRESHOLD_CEILING = 0.35, 0.60
+# Two bands this close in stability are the same answer, and the tie goes to the lower one.
+HUD_STABILITY_TIE = 0.02
+# Mean grey levels the walking frames must differ by for the comparison to mean anything.
+# A dungeon supplies more than this from torchlight alone; a player who never moved does not.
+HUD_MIN_MOVEMENT = 1.0
+
+
+def choose_hud_region(walking, absent=None):
+    """Pick the template's band by MEASURING the three things it has to do.
+
+    Returns (region, stability, leak).
+
+    WHY ONE SCREENSHOT CANNOT DECIDE THIS
+    -------------------------------------
+    The old rule was edge density plus a straightness check, and both are properties of a
+    single picture. The minimap's interior satisfies them beautifully — it is a dense, ruled
+    grid — and it is the one part of the panel that must never be matched, because it redraws
+    as the floor is explored and scrolls with the player. At 1920x1080 that is what got
+    chosen: a 153x38 crop of map interior, which then matched 0 of 135 frames of the session
+    it was fitted for. Episodes never closed, and a whole dive came back as one.
+
+    The property that separates chrome from map is not visible in one frame. It is:
+
+        stability   the same band on ANOTHER walking frame still correlates
+        leak        the same band on a frame with NO HUD does not
+        straightness it looks like a panel edge rather than scenery
+
+    So this takes several walking frames and, when it has one, the drop shot as the negative.
+    With fewer than two walking frames there is nothing to measure and it falls back to the
+    density search, which is what every profile fitted before this used.
+    """
+    from .capture.hud import _to_gray_array, _zncc
+
+    frames = [f.convert("L") for f in (walking if isinstance(walking, (list, tuple))
+                                       else [walking])]
+    if len(frames) < 2:
+        return detect_hud_region(frames[0]), None, None
+
+    import numpy as np
+
+    # DID THE PLAYER ACTUALLY WALK? If the frames are the same picture, every band is
+    # perfectly stable — including the map interior — and stability has stopped being
+    # evidence of anything. Say so and use the rule that does not need it.
+    first = np.asarray(frames[0], dtype=float)
+    moved = max(float(np.abs(np.asarray(f, dtype=float) - first).mean()) for f in frames[1:])
+    if moved < HUD_MIN_MOVEMENT:
+        log.warning("wddrop: the walking shots are the same picture (%.2f levels apart); "
+                    "falling back to the density search. Keep walking while it captures.",
+                    moved)
+        return detect_hud_region(frames[0]), None, None
+
+    negative = absent.convert("L") if absent is not None else None
+    w, h = frames[0].size
+    sample = (64, 24)
+    step = max(4, w // 160)
+    found = []
+    for fw, fh in HUD_BAND_SHAPES:
+        bw, bh = int(w * fw), int(h * fh)
+        if bw < 8 or bh < 8:
+            continue
+        last = max(0, w - bw)
+        for y0 in range(0, max(1, int(h * HUD_SEARCH_Y) - bh), step):
+            for x0 in range(min(int(w * HUD_SEARCH_X), last), last + 1, step):
+                box = (x0, y0, x0 + bw, y0 + bh)
+                cuts = [_to_gray_array(f.crop(box), sample) for f in frames]
+                stability = min(_zncc(cuts[0], c) for c in cuts[1:])
+                if stability < HUD_MIN_STABILITY:
+                    continue
+                region = (x0 / w, y0 / h, (x0 + bw) / w, (y0 + bh) / h)
+                if hud_straightness(frames[0], region) < HUD_STRAIGHTNESS_MIN:
+                    continue
+                leak = 0.0
+                if negative is not None:
+                    leak = _zncc(cuts[0], _to_gray_array(negative.crop(box), sample))
+                    if leak > HUD_MAX_LEAK:
+                        continue
+                found.append((stability, leak, region, y0))
+    if not found:
+        log.warning("wddrop: no band held still between the walking shots; falling back to "
+                    "the density search. Were they taken standing in one place?")
+        return detect_hud_region(frames[0]), None, None
+    # AMONG THE BANDS THAT ARE EQUALLY STABLE, TAKE THE LOWEST. The chrome is under the map in
+    # both layouts — buttons and a collapse chevron below a panel of map — so when several
+    # bands hold still equally well, depth is the thing that tells them apart. Without this
+    # the scan order decides, and the scan starts at the top, i.e. inside the map.
+    ceiling = max(s for s, _l, _r, _y in found)
+    stability, leak, region, _y0 = max(
+        (c for c in found if c[0] >= ceiling - HUD_STABILITY_TIE), key=lambda c: c[3])
+    log.info("wddrop: HUD band %s stability %.3f leak %+.3f",
+             tuple(round(v, 4) for v in region), stability, leak)
+    return region, stability, leak
+
+
+# What the pair of calibration shots has to prove about itself, as findings rather than as
+# printed lines. It lives here because BOTH front ends need it and only one of them had it:
+# the command line printed these and the window did not, so a fit made in the window could
+# carry a HUD template cut from a wall and say nothing at all. That failure ships silently —
+# episodes never close and a dive comes back as one chest.
+HUD_SEPARATION_MIN = 0.3
+
+
+def hud_findings(profile, walk_image, drop_image) -> list[str]:
+    """Everything wrong with this pair of shots, in the order a person would notice it.
+
+    Empty means the pair is sound. The template is cut FROM the walk shot, so it scores ~1.0
+    there by construction; what matters is that it scores low on the drop shot, where the
+    minimap is not showing.
+    """
+    from .capture.hud import HudDetector
+
+    found: list[str] = []
+    if profile.hud_region:
+        straight = hud_straightness(walk_image, tuple(profile.hud_region))
+        if straight < HUD_STRAIGHTNESS_MIN:
+            found.append(
+                f"the region found for the minimap does not look like a panel edge "
+                f"(straightness {straight:.2f}, expected {HUD_STRAIGHTNESS_MIN:.2f}+). "
+                f"If hud_template.png shows a wall, take the walking shot with the minimap "
+                f"open.")
+    try:
+        detector = HudDetector.from_profile(profile)
+    except SystemExit:
+        return found + ["this profile has no HUD template, so chests cannot be bracketed."]
+    walk = detector.read(walk_image.convert("L")).score
+    drop = detector.read(drop_image.convert("L")).score
+    if walk - drop < HUD_SEPARATION_MIN:
+        found.append(
+            f"the two shots look alike to the HUD detector (walking {walk:+.3f}, chest "
+            f"{drop:+.3f}). The walking one should show the minimap and the chest one should "
+            f"not, or chests will never be bracketed.")
+    return found
+
+
 def fit_hud(profile: Profile, walking_frame, region: tuple[float, float, float, float] | None = None,
-            template_path: str | Path | None = None) -> Profile:
-    """Capture the HUD reference from a frame taken while walking in a dungeon.
+            template_path: str | Path | None = None, absent=None) -> Profile:
+    """Capture the HUD reference from frames taken while walking in a dungeon.
 
     The template is cut from the player's own screen so it carries their resolution, UI scale
     and theme. It must be the panel CHROME (button bar / chevron), not the map interior — the
     map changes constantly as the floor is explored, so matching it would drift.
+
+    `walking_frame` may be a LIST. Given more than one, the band is chosen by what it does
+    across them rather than by how it looks in one — see `choose_hud_region`, and the profile
+    then also carries a threshold fitted to the two scores instead of the built-in guess.
     """
     from .capture.hud import DEFAULT_CHROME_REGION, crop_region
 
+    frames = list(walking_frame) if isinstance(walking_frame, (list, tuple)) else [walking_frame]
+    walking_frame = frames[0]
+    stability = leak = None
     if region is None:
         try:
-            region = detect_hud_region(walking_frame)
+            region, stability, leak = choose_hud_region(frames, absent)
         except Exception as exc:
             log.warning("wddrop: HUD auto-detect failed (%s); falling back to default", exc)
             region = DEFAULT_CHROME_REGION
+    if stability is not None and leak is not None:
+        # BETWEEN WHAT WAS MEASURED, not the built-in 0.60 — which is above every score a
+        # correct band scored at 1920x1080, and so refused the panel it was cut from.
+        profile.hud_threshold = min(HUD_THRESHOLD_CEILING,
+                                    max(HUD_THRESHOLD_FLOOR, (stability + leak) / 2))
+        profile.notes = dict(profile.notes or {})
+        profile.notes.update(hud_stability=round(stability, 4), hud_leak=round(leak, 4),
+                             hud_threshold=round(profile.hud_threshold, 4))
     crop = crop_region(walking_frame.convert("L"), region)
     profile.hud_template_b64 = encode_template(crop)
     profile.hud_region = region

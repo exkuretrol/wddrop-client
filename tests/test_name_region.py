@@ -249,6 +249,8 @@ def _band_runner(renderer, names):
     from wddrop_client.runner import CaptureRunner
 
     runner = CaptureRunner.__new__(CaptureRunner)
+    runner._spacing_renderers = {}
+    runner._spacing_votes = {}
     runner.profile = Profile(frame_size=(704, 1241), message_band=(0, 30),
                              font_path=FONTS[0], font_size=26, offset=(0, 0),
                              calibration_score=0.9)
@@ -568,3 +570,104 @@ def test_every_droppable_name_still_fits_on_the_row_the_client_can_see():
     assert usable - width >= 40, (
         f"only {usable - width}px of headroom left — {widest} is {width}px of {usable}. "
         f"One more character and a real drop goes unread.")
+
+
+# -- a line whose wording wrapped onto a row the client cannot see ------------------------
+
+def test_a_wrapped_line_is_cut_at_its_separator():
+    """The game wraps rather than clips, and the window is ONE row.
+
+    「北穿の幽霊城の常なる冥刻のガラクタ×3を」 leaves a single character of 「を手に入れた!!」 on
+    the row the client reads. Measured on that frame: the full wording scores 0.390 there and
+    the 「を」 alone 0.918, so nothing was masked and the 「×3を」 that no candidate covers
+    dragged the true name from 0.86 to 0.67 — under every gate. The chest was recorded one
+    item short, and the line was in the recording all along.
+
+    The separator carries the cut on its own, but only on evidence that this IS a wrap: an
+    unmistakable 「×」 with the wording's first character within a few digits' width after it.
+    """
+    from wddrop_client.capture.glyph import mask_after_name, make_renderer
+
+    atlas = ROOT / "data" / "atlas.ja.json"
+    if not atlas.exists():
+        pytest.skip("atlas not built")
+    import numpy as np
+
+    r = make_renderer(str(atlas), 22, (740, 45), 0.0)
+    after = "を手に入れた!!"
+
+    wrapped = r.render("北穿の幽霊城の常なる冥刻のガラクタ×3を")
+    _masked, cut = mask_after_name(wrapped, r, after, "×")
+    assert cut is not None, "a wrapped line was left with its tail in the comparison"
+    name_only = r.render("北穿の幽霊城の常なる冥刻のガラクタ")
+    from wddrop_client.capture.glyph import ink_bbox
+
+    assert abs(cut - ink_bbox(name_only)[2]) < 12, "the cut is not at the end of the name"
+
+    # And a name that merely CONTAINS an ×-like stroke is not cut at it: nothing follows the
+    # separator that looks like the wording, so there is no wrap to believe in.
+    plain = r.render("下級鉄鉱石")
+    _m2, cut2 = mask_after_name(plain, r, after, "×")
+    assert cut2 is None
+
+
+def test_the_whole_wording_still_wins_when_it_is_on_the_row():
+    """The wrap path is a fallback, not a replacement: an unwrapped line is cut at the words,
+    which is the stronger evidence and where the cut has always been."""
+    from wddrop_client.capture.glyph import ink_bbox, mask_after_name, make_renderer
+
+    atlas = ROOT / "data" / "atlas.ja.json"
+    if not atlas.exists():
+        pytest.skip("atlas not built")
+    r = make_renderer(str(atlas), 22, (740, 45), 0.0)
+    line = r.render("下級鉄鉱石×3を手に入れた!!")
+    _masked, cut = mask_after_name(line, r, "を手に入れた!!", "×")
+    assert cut is not None
+    assert abs(cut - ink_bbox(r.render("下級鉄鉱石"))[2]) < 12
+
+
+def test_a_narrow_digit_cannot_stand_in_for_a_wide_one():
+    """A digit's WIDTH is part of its shape, and `_fitted` throws it away: it resizes both
+    axes onto the observed box, so a 「1」 stretched to the width of a 「4」 is compared as if
+    it had always been that wide.
+
+    At 18px (1600x900) that is enough to win. A real 「4」 8px wide was read as 「1」 at 0.4886
+    against the 4's own 0.3847, and 「×14」 was recorded as ×11 — a chest's quantity, in the
+    study's own data. Keeping the aspect makes the same comparison 0.7868 against 0.1186.
+
+    `_fitted` stays as the fallback: a substitute face genuinely draws narrower digits (its
+    「1」 is 3px where the game's is 6px) and stretching is the only way to read one at all.
+    """
+    import numpy as np
+
+    from wddrop_client.capture.glyph import (_digit_shapes, _fitted, _fitted_aspect,
+                                             ink_bbox, make_renderer, zncc)
+
+    atlas = ROOT / "data" / "atlas.ja.json"
+    if not atlas.exists():
+        pytest.skip("atlas not built")
+    renderer = make_renderer(str(atlas), 18, (200, 40), 0.9)
+    shapes = dict(_digit_shapes(renderer))
+
+    # Softened, because a CAPTURED digit is: the difference between the two fits only shows
+    # on ink that has been through a screen and a PNG. On a pixel-perfect render both
+    # separate fine, which is why this was not caught before a chest was recorded wrong.
+    from PIL import Image, ImageFilter
+
+    drawn = np.asarray(renderer.render("4"), dtype=float)
+    drawn = np.asarray(Image.fromarray(drawn.astype("uint8")).filter(
+        ImageFilter.GaussianBlur(0.4)), dtype=float)
+    box = ink_bbox(drawn, min_column_ink=1)
+    seen = drawn[box[1]:box[3], box[0]:box[2]]
+
+    def best(fit):
+        scored = sorted(((zncc(seen, fit(shapes[d], seen)), d) for d in range(10)
+                         if fit(shapes[d], seen) is not None), reverse=True)
+        return scored[0][1], scored[0][0] - scored[1][0]
+
+    winner, margin = best(_fitted_aspect)
+    assert winner == 4, "the digit that is there did not win on shape"
+    _stretched, stretched_margin = best(_fitted)
+    assert margin > stretched_margin, (
+        f"keeping the aspect should separate them better: {margin:.4f} vs "
+        f"{stretched_margin:.4f}")

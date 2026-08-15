@@ -56,9 +56,17 @@ def strips(profile, record: bool, mining: bool = True):
     """
     if record:
         return None
+    from .calibration import panel_columns, read_columns
+
     top, bottom = tuple(profile.message_band)
     w, h = tuple(profile.frame_size)
-    out = [(0, max(0, top - 4), w, min(h, bottom + 4) - max(0, top - 4))]
+    # AS WIDE AS THE GAME WRITES, AND NO WIDER. The dialogue box is centred and the text is
+    # left-aligned in it, so `text_x0` gives both its edges — at 1920x1080 that is 504 columns
+    # of the 1920 this used to copy, for every strip, at every sample. What is cut away is
+    # scenery the recogniser never reads: the comparison window is anchored at `text_x0` and
+    # was always narrower than the frame.
+    x0, x1 = read_columns(profile) or (0, w)
+    out = [(x0, max(0, top - 4), x1 - x0, min(h, bottom + 4) - max(0, top - 4))]
     if profile.hud_region:
         left, upper, right, lower = profile.hud_region
         out.append((int(left * w), int(upper * h),
@@ -66,8 +74,12 @@ def strips(profile, record: bool, mining: bool = True):
     if mining:
         from .capture.panel import SEARCH_BOTTOM, SEARCH_TOP
 
+        # THE PANEL'S OWN BOX, which is wider than the message band's — 644 columns against
+        # 504 at 1920x1080. The ▼ that says the panel has finished drawing sits in the last
+        # 70 of them, so a strip cut to the band's width does not contain it.
+        px0, px1 = panel_columns(profile) or (0, w)
         panel_top = int(h * SEARCH_TOP)
-        out.append((0, panel_top, w, int(h * SEARCH_BOTTOM) - panel_top))
+        out.append((px0, panel_top, px1 - px0, int(h * SEARCH_BOTTOM) - panel_top))
     return out
 
 

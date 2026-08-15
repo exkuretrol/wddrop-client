@@ -245,11 +245,67 @@ def entry_script(target: Path) -> Path:
     return target
 
 
+# What every release page says regardless of what changed in it: how to run the thing.
+RELEASE_PREAMBLE = """Download `wddrop.exe` and run it. Nothing to install.
+
+Set the game to 1920 x 1080 or 1600 x 900 (Options -> Screen size). Both are read without
+setting anything up here, in a window or full screen. The tall 704 x 1241 window works too.
+"""
+
+
+def _client_version() -> str:
+    """What the client calls itself, read rather than duplicated — the tag, the exe and the
+    changelog all have to agree, and three copies of a number agree until they do not."""
+    import re
+
+    text = (HERE / "client" / "wddrop_client" / "config.py").read_text(encoding="utf-8")
+    found = re.search(r'CLIENT_VERSION\s*=\s*"([^"]+)"', text)
+    if not found:
+        raise SystemExit("[!] client/wddrop_client/config.py has no CLIENT_VERSION")
+    return found.group(1)
+
+
+def release_notes(version: str, changelog: Path | None = None) -> str:
+    """The release page's text: the standing how-to-run note, then THIS version's changelog.
+
+    Read out of CHANGELOG.md rather than generated from the commit log, because the two would
+    then say different things about the same release and the generated one would say less.
+    A tool like git-cliff can only reach what fits in a commit SUBJECT; the entry that
+    matters here is the one saying which recordings a fix affects and whether they are worth
+    re-verifying, and that is written by hand.
+
+    Raises if the version has no section: a release page that quietly says nothing about what
+    changed is worse than a build that does not go out.
+    """
+    import re
+
+    path = Path(changelog) if changelog else HERE / "CHANGELOG.md"
+    text = path.read_text(encoding="utf-8")
+    # From this version's heading to the next heading of the same level.
+    # Up to the next version heading, the file's closing rule, or its link definitions —
+    # the LAST section runs to the end of the file otherwise, and the release page picks up
+    # the footer with it.
+    found = re.search(
+        r"^## \[%s\][^\n]*\n(.*?)(?=^## |^---\s*$|^\[[^\]]+\]:|\Z)" % re.escape(version),
+        text, re.M | re.S)
+    if not found:
+        raise SystemExit(
+            f"[!] CHANGELOG.md has no section for {version}.\n"
+            f"    Add one under a `## [{version}] - <date>` heading — the release page is "
+            f"built from it, and a release with nothing to say about itself is a release "
+            f"nobody can decide about."
+        )
+    return RELEASE_PREAMBLE + "\n" + found.group(1).strip() + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--requirements", action="store_true",
                     help="print what has to be installed to build, one per line, so a "
                          "workflow can install exactly this list instead of keeping its own")
+    ap.add_argument("--release-notes", metavar="VERSION", nargs="?", const="",
+                    help="print the release page's text for VERSION (default: the version "
+                         "the client calls itself), taken from CHANGELOG.md")
     ap.add_argument("--with-atlas", action="store_true",
                     help="bundle a prebuilt atlas, for a build that must work without the "
                          "game installed (see the licence note)")
@@ -259,6 +315,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="leave out the parts that are still in development (calibration)")
     args = ap.parse_args(argv)
 
+    if args.release_notes is not None:
+        version = args.release_notes or _client_version()
+        print(release_notes(version), end="")
+        return 0
     if args.requirements:
         # ONE PER LINE, for a requirements file rather than a command line. Half of these
         # carry a `>=`, which is a redirection operator to the shell that would expand them

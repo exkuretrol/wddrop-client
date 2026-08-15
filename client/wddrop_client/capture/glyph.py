@@ -383,9 +383,14 @@ def make_renderer(source: str | Path, size: int, window: tuple[int, int] = WINDO
     One entry point so calibration, the runner and the tools cannot disagree about which is
     in use: a .json is an atlas, anything else is a font.
     """
-    return (AtlasRenderer if str(source).lower().endswith(".json") else GlyphRenderer)(
+    renderer = (AtlasRenderer if str(source).lower().endswith(".json") else GlyphRenderer)(
         source, size, window, letter_spacing
     )
+    # WHAT IT WAS BUILT FROM, kept on it. A caller that wants the same face at another size
+    # or spacing — the panel's fit, the band's second look at spacing — would otherwise have
+    # to carry the path alongside every renderer it holds, and one of them would drift.
+    renderer.source = str(source)
+    return renderer
 
 
 def _text_left(band_gray, x0: int, level: int = INK_LEVEL) -> int:
@@ -405,7 +410,7 @@ def _text_left(band_gray, x0: int, level: int = INK_LEVEL) -> int:
 
 
 def anchor_window(frame_gray, band: tuple[int, int], window: tuple[int, int] = WINDOW,
-                  x0_fixed: int | None = None):
+                  x0_fixed: int | None = None, columns: tuple[int, int] | None = None):
     """Cut the comparison window, anchored on where the text actually starts.
 
     `band` is (top, bottom) of the calibrated message region. Anchoring at a known origin is
@@ -416,14 +421,21 @@ def anchor_window(frame_gray, band: tuple[int, int], window: tuple[int, int] = W
     when available: the drop line is left-aligned at a constant x, so deriving the origin
     from whatever happens to be lit in the band makes every reading hostage to stray pixels
     elsewhere on that row.
+
+    `columns` bounds where that ink is looked for. It fixes the OTHER half of the anchor: the
+    row the text sits on comes from the ink box either way, and on a whole frame at 1920x1080
+    the brightest thing in the band's rows is usually the dungeon, not the message.
     """
     np = _np()
     arr = np.asarray(frame_gray, dtype=float)
     top, bottom = band
-    box = ink_bbox(arr[top:bottom, :])
+    left, right = columns if columns else (0, arr.shape[1])
+    strip = arr[top:bottom, left:right]
+    box = ink_bbox(strip)
     if box is None:
         return None
-    x0, y0 = (x0_fixed if x0_fixed is not None else _text_left(arr[top:bottom, :], box[0])), top + box[1]
+    x0 = x0_fixed if x0_fixed is not None else left + _text_left(strip, box[0])
+    y0 = top + box[1]
     w, h = window
     out = np.zeros((h, w))
     src = arr[max(0, y0 - PAD) : y0 - PAD + h, max(0, x0 - PAD) : x0 - PAD + w]
@@ -773,6 +785,10 @@ QTY_SEARCH_LEFT, QTY_SEARCH_RIGHT = 30, 50
 # is not that number. This is what kills the ×62 class outright: two digits do not fit in a
 # ten-pixel span however the correlation falls.
 DIGIT_WIDTH_TOLERANCE = 0.35
+# How much a captured glyph may be wider or narrower than its own rendering before the shape
+# comparison stops recognising it. One pixel: that is what antialiasing and a PNG do to a
+# stroke, measured on both the game's own font and a substitute.
+DIGIT_WIDTH_SLACK = 1
 # A whole LINE is found with MIN_COLUMN_INK=2, which suppresses stray antialiasing across
 # hundreds of columns. One digit cannot afford it: the outermost column of a 「3」 is the tip
 # of an arc, one or two pixels tall, so a 2-pixel floor reads it as empty and the walk that
@@ -799,6 +815,15 @@ def _digit_ink_level(window, x0: int, x1: int) -> float:
 
     Half the local peak, floored so a blank region cannot produce a threshold of nearly zero
     and call the background text.
+
+    MEASURED OVER THE SEPARATOR, NOT OVER THE WHOLE SPAN, and that is the difference between
+    reading 「×10」 and reporting `qty_unknown`. The span reaches past the digits into the
+    words after them, and CJK is drawn with thicker strokes than half-width digits: on a real
+    1920x1080 line the 「を手に入れた!!」 peaked at 203 while the digits peaked at 153, so half
+    the local peak was 101 — above the whole left half of the 「1」. The walk then started
+    inside it, the span came out one digit wide, and a 10-item chest was recorded as unknown.
+    The 「×」 is the same size and weight as the digits it introduces, and it is at a position
+    that is already known exactly, so it is the honest thing to measure.
     """
     np = _np()
     region = np.asarray(window, dtype=float)[:, max(0, x0):max(x0 + 1, x1)]
@@ -846,6 +871,44 @@ MIN_NAME_PX = 8
 SEPARATOR_STRONG = 0.85
 
 
+def _cut_at_a_wrapped_separator(window, renderer, suffix: str, separator: str, dy: int):
+    """Mask a line whose wording wrapped onto a row this window cannot see.
+
+    Returns (window, cut) like `mask_after_name`, and (window, None) unless BOTH hold:
+
+      * the separator is unmistakable — SEPARATOR_STRONG, not the ordinary bar. A 「×」 shape
+        appears inside plenty of glyphs, and cutting on a weak one lands in the middle of a
+        name, which reads nothing at all;
+      * the wording's FIRST CHARACTER follows it within a few digits' width. That is the
+        wrap's signature: the line really does continue, it simply continues below. A name
+        that merely contains an ×-like stroke has no 「を」 sitting a digit later.
+
+    Measured on the frame this was written for — 「…のガラクタ×3を」 with 「手に入れた!!」 on the
+    row below: separator 0.907, 「を」 0.918, and the true name 0.6687 -> 0.7026 once the tail
+    is off the comparison.
+    """
+    np = _np()
+    sep = _hcrop(renderer.render(separator)) if separator else None
+    if sep is None or sep.shape[1] >= window.shape[1]:
+        return window, None
+    got, sep_x = _slide(window, sep, MIN_NAME_PX, window.shape[1] - sep.shape[1], dy)
+    if sep_x is None or got < SEPARATOR_STRONG or sep_x < MIN_NAME_PX:
+        return window, None
+    head = list(_tail_prefixes(suffix))
+    first = head[-1] if head else ""
+    shape = _hcrop(renderer.render(first)) if first else None
+    if shape is None or shape.shape[1] >= window.shape[1]:
+        return window, None
+    digits = [s for _d, s in _digit_shapes(renderer) if s is not None]
+    reach = sep.shape[1] + MAX_DIGITS * (max((s.shape[1] for s in digits), default=0) + 4) + 8
+    seen, _at = _slide(window, shape, sep_x, sep_x + reach, dy)
+    if seen < SEPARATOR_STRONG:
+        return window, None
+    masked = np.asarray(window, dtype=float).copy()
+    masked[:, sep_x:] = 0.0
+    return masked, sep_x
+
+
 def mask_after_name(window, renderer, suffix: str, separator: str = "×",
                     dy: int = 0, min_score: float = SEPARATOR_MIN_SCORE):
     """Blank everything in the observation that is not the item's NAME.
@@ -887,7 +950,19 @@ def mask_after_name(window, renderer, suffix: str, separator: str = "×",
         return window, None
     got, at = _slide(window, tail, 0, window.shape[1] - tail.shape[1], dy)
     if at is None or got < min_score or at < MIN_NAME_PX:
-        return window, None
+        # THE WORDING MAY BE ON THE NEXT ROW. The game wraps rather than clips, and this
+        # window is one row, so on a long line most of 「を手に入れた!!」 is somewhere the
+        # client cannot see: 「北穿の幽霊城の常なる冥刻のガラクタ×3を」 leaves ONE character of
+        # it. Measured on that frame — the full wording scores 0.390 here and the 「を」 alone
+        # 0.918 — and with nothing masked the 「×3を」 that no candidate covers drags the true
+        # name from 0.86 to 0.67, under every gate. The line was in the recording and the
+        # chest was recorded one item short.
+        #
+        # So the separator is allowed to carry the cut on its own, but only on the evidence
+        # that this IS a wrapped line rather than a stroke inside a name: the 「×」 must be
+        # unmistakable AND the wording's first character must follow it within a few digits'
+        # width — which is exactly where the quantity reader already looks for it.
+        return _cut_at_a_wrapped_separator(window, renderer, suffix, separator, dy)
 
     cut = at
     sep = _hcrop(renderer.render(separator)) if separator else None
@@ -953,12 +1028,19 @@ def _segments(window, left: int, right: int, min_width: int,
     Reading them one at a time is what lets a quantity be any size — enumerating whole
     numbers instead capped this at 99, and a chest that paid 600 Gil was read as unknown.
 
-    A run NARROWER than the narrowest digit is not a digit, so it is folded into its
+    A run far narrower than the narrowest digit is not a digit, so it is folded into its
     neighbour. At 1920x1080 the arc tip of a 「3」 detaches into its own one-pixel column
     (`#.######`), and treating that as a separate glyph turned a readable 3 into unknown.
-    Merging on width rather than on gap size is what keeps a real 「1」 — which is exactly
-    this narrow — from being swallowed by the digit beside it.
+
+    FAR narrower, not merely narrower — HALF the narrowest digit. The narrowest digit IS the
+    「1」, so a bar that rounds one column thinner than the atlas draws it was folded into the
+    digit beside it: 「×10」 came out as a single 23px run, no single digit is that wide, and
+    a ten-item chest was recorded as `qty_unknown`. A detached arc tip is one or two columns;
+    a real 「1」 is within a column of its rendered width. Half is the gap between them.
     """
+    # Half the narrowest digit, but never under two columns — a one-column run is antialiasing
+    # in any font.
+    narrow = max(2, min_width // 2)
     runs, start = [], None
     for x in range(left, right):
         if _lit(window, x, level):
@@ -971,11 +1053,64 @@ def _segments(window, left: int, right: int, min_width: int,
 
     merged: list[tuple[int, int]] = []
     for run in runs:
-        if merged and (run[1] - run[0] < min_width or merged[-1][1] - merged[-1][0] < min_width):
+        if merged and (run[1] - run[0] < narrow or merged[-1][1] - merged[-1][0] < narrow):
             merged[-1] = (merged[-1][0], run[1])
         else:
             merged.append(run)
     return merged
+
+
+def _fitted_aspect(shape, like):
+    """`shape` scaled by HEIGHT alone and placed in `like`'s box — its width kept.
+
+    A DIGIT'S WIDTH IS PART OF ITS SHAPE, and `_fitted` throws it away: it resizes both axes
+    onto the observed box, so a 「1」 stretched to the width of a 「4」 is compared as if it had
+    always been that wide. At 18px (1600x900) that is enough to win — a real 「4」 8px wide was
+    read as 「1」 at 0.4886 against the 4's own 0.3847, and 「×14」 was recorded as ×11.
+
+    Keeping the aspect makes the same comparison 0.7868 for the 4 against 0.1186 for the 1.
+    It is tried FIRST for that reason; `_fitted` remains as the fallback, because a substitute
+    face genuinely draws narrower digits (its 「1」 is 3px where the game's is 6px) and
+    stretching is the only way to read one of those at all.
+    """
+    from PIL import Image
+
+    np = _np()
+    box = ink_bbox(shape, min_column_ink=DIGIT_MIN_COLUMN_INK)
+    if box is None:
+        return None
+    cut = shape[box[1]:box[3], box[0]:box[2]]
+    height, width = like.shape
+    natural = max(1, int(round(cut.shape[1] * (height / cut.shape[0]))))
+
+    def placed(target: int):
+        img = np.asarray(
+            Image.fromarray(cut.astype("uint8")).resize((target, height), Image.LANCZOS),
+            dtype=float)
+        if target == width:
+            return img
+        out = np.zeros((height, width), dtype=float)
+        if target < width:                   # centred, as a narrower glyph sits in its cell
+            start = (width - target) // 2
+            out[:, start:start + target] = img
+        else:
+            start = (target - width) // 2
+            out[:] = img[:, start:start + width]
+        return out
+
+    # A PIXEL EITHER WAY, because that is what a screenshot does to ink. Blur widens a glyph
+    # by about a pixel, and at 18px a 「3」 that arrives 9px wide then matches the 「8」 (9px
+    # rendered) EXACTLY while its own 8px rendering sits a pixel short — 0.6774 against
+    # 0.4391, a confident 18 for a line that says 13. With the slack the true digit is
+    # measured at the width it actually has, and 13, 23, 14, 600 and 1000 all read at every
+    # fitted geometry there is.
+    best = None
+    for target in range(max(1, natural - DIGIT_WIDTH_SLACK), natural + DIGIT_WIDTH_SLACK + 1):
+        candidate = placed(target)
+        score = zncc(like, candidate)
+        if best is None or score > best[0]:
+            best = (score, candidate)
+    return best[1]
 
 
 def _fitted(shape, like):
@@ -1055,7 +1190,7 @@ def recognize_quantity(
     # Decided BEFORE the walks, because the walks are what clipped a dim glyph: they stop on
     # the first column over the threshold, so too high a threshold silently shortens the span
     # and a narrower digit wins on width.
-    level = _digit_ink_level(window, sep_x + sep_shape.shape[1], sep_x + span_limit)
+    level = _digit_ink_level(window, sep_x, sep_x + sep_shape.shape[1])
 
     left = _walk_out(window, sep_x + sep_shape.shape[1], +1, level)
     right = None
@@ -1091,29 +1226,19 @@ def recognize_quantity(
     if not runs or len(runs) > MAX_DIGITS:
         return None, 0.0                # nothing legible after the separator, or not a number
 
+    # SHAPE FIRST, STRETCH SECOND. `_fitted_aspect` keeps the candidate's width, which is
+    # part of what a digit IS; `_fitted` resizes both axes and lets a 「1」 stand in for a
+    # 「4」. Reading the same span both ways and preferring the first that is unambiguous
+    # keeps the game's own font sharp — 0.7868 against 0.1186 where stretching gave 0.6327
+    # against 0.4213 — without losing a substitute face, whose digits really are narrower
+    # and can only be read stretched.
     digits, worst = [], 1.0
-    for x0, x1 in runs:
-        box = ink_bbox(window[:, x0:x1], level=level, min_column_ink=DIGIT_MIN_COLUMN_INK)
-        if box is None:
-            return None, 0.0
-        seen = window[:, x0:x1][box[1]:box[3], box[0]:box[2]]
-        scored: list[tuple[float, int]] = []
-        for d, shape in glyphs:
-            if abs(shape.shape[1] - seen.shape[1]) > max(3, DIGIT_WIDTH_TOLERANCE * seen.shape[1]):
-                # No single digit is this wide: two of them ran together, or this is not a
-                # digit at all. Unknown — guessing here is how a 10px span became ×47.
-                continue
-            candidate = _fitted(shape, seen)
-            if candidate is not None:
-                scored.append((zncc(seen, candidate), d))
-        if not scored:
-            return None, 0.0
-        scored.sort(reverse=True)
-        margin = scored[0][0] - (scored[1][0] if len(scored) > 1 else 0.0)
-        if margin < QTY_MIN_MARGIN:
-            return None, margin         # legible but ambiguous: unknown, never a guess
-        digits.append(scored[0][1])
-        worst = min(worst, margin)
+    for fit in (_fitted_aspect, _fitted):
+        digits, worst = _read_digits(window, runs, glyphs, level, fit)
+        if digits:
+            break
+    if not digits:
+        return None, worst
 
     if digits[0] == 0:
         return None, worst              # no quantity is written with a leading zero
@@ -1121,6 +1246,37 @@ def recognize_quantity(
     if quantity > max_quantity:
         return None, worst              # implausible for one line: report it as unread
     return quantity, worst
+
+
+def _read_digits(window, runs, glyphs, level, fit):
+    """One digit per run, or ([], margin) when any of them is unreadable or ambiguous.
+
+    `fit` is how a candidate is brought onto the observed box — see `_fitted_aspect`.
+    """
+    digits, worst = [], 1.0
+    for x0, x1 in runs:
+        box = ink_bbox(window[:, x0:x1], level=level, min_column_ink=DIGIT_MIN_COLUMN_INK)
+        if box is None:
+            return [], 0.0
+        seen = window[:, x0:x1][box[1]:box[3], box[0]:box[2]]
+        scored: list[tuple[float, int]] = []
+        for d, shape in glyphs:
+            if abs(shape.shape[1] - seen.shape[1]) > max(3, DIGIT_WIDTH_TOLERANCE * seen.shape[1]):
+                # No single digit is this wide: two of them ran together, or this is not a
+                # digit at all. Unknown — guessing here is how a 10px span became ×47.
+                continue
+            candidate = fit(shape, seen)
+            if candidate is not None:
+                scored.append((zncc(seen, candidate), d))
+        if not scored:
+            return [], 0.0
+        scored.sort(reverse=True)
+        margin = scored[0][0] - (scored[1][0] if len(scored) > 1 else 0.0)
+        if margin < QTY_MIN_MARGIN:
+            return [], margin           # legible but ambiguous: unknown, never a guess
+        digits.append(scored[0][1])
+        worst = min(worst, margin)
+    return digits, worst
 
 
 def required_window(renderer: "GlyphRenderer", prefix: str, names: list[str],

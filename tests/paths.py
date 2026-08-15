@@ -72,9 +72,17 @@ GAME = _path("WDDROP_TEST_GAME")
 
 
 def capture(name: str) -> Path | None:
-    """One recorded session by name, from whichever configured folder holds it."""
+    """One recorded session by name, from whichever configured folder holds it.
+
+    Looked for one level down as well, because that is where the client puts sessions now:
+    `capture/1920x1080/session-...`. A test that knew only the flat layout skipped for no
+    reason other than the folder the recording landed in.
+    """
     for root in CAPTURE_ROOTS:
         found = root / name
         if found.exists():
             return found
+        for child in sorted(root.glob("*/" + name)):
+            if child.exists():
+                return child
     return None

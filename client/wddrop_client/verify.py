@@ -176,14 +176,34 @@ class TruthStore:
 
     @staticmethod
     def key_for(event: dict) -> str:
-        """Identify a chest by its SESSION and index, not by dive_id.
+        """Identify one reading by its SESSION and its index, not by dive_id.
 
         dive_id is regenerated on every replay, so keying on it would lose every
         confirmation the moment a recording was re-read — which is exactly when the
         confirmations are needed.
+
+        A MINING SWING IS NOT A CHEST, and it has no chest index. Both used to key on
+        `chest_index_in_dive`, which is None for every panel, so a session's swings all
+        answered to `<session>#None`: confirming the first one marked the rest "already
+        confirmed", and they were never looked at. They are counted separately now — swings
+        by `mining_index_in_dive`, chests by their own index — so the two cannot collide and
+        neither can collide with itself.
+
+        An event recorded before that counter existed falls back to the frame its first line
+        was read from, which is unique per swing within a recording and is what the reader
+        would be checked against anyway.
         """
         dive = event.get("dive") or {}
-        return f"{event.get('session_label', '')}#{dive.get('chest_index_in_dive')}"
+        label = event.get("session_label", "")
+        if event.get("provenance") == "pickaxe_break":
+            return f"{label}#break{dive.get('break_index_in_dive')}"
+        if event.get("provenance") == "mining" or dive.get("mining_index_in_dive") is not None:
+            index = dive.get("mining_index_in_dive")
+            if index is None:
+                contents = event.get("contents") or [{}]
+                index = f"@{contents[0].get('source_frame') or dive.get('elapsed_seconds')}"
+            return f"{label}#mine{index}"
+        return f"{label}#{dive.get('chest_index_in_dive')}"
 
     def get(self, key: str) -> ChestTruth | None:
         return self._entries.get(key)

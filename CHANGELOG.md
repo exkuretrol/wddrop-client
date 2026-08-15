@@ -1,0 +1,148 @@
+# Changelog
+
+All notable changes to the client are recorded here.
+
+The format is [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
+follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). The version a record was
+read by is stamped on the record itself, so what an older build missed stays identifiable
+rather than being mistaken for a chest that held less.
+
+Drafted with git-cliff, then **written by hand** — and that order is the point. The draft
+groups the conventional commits into Added/Changed/Fixed; what a player needs is what changed
+for *them* and whether their existing recordings are worth re-verifying, and that never fits
+in a commit subject.
+
+    tools/draft_changelog.sh      the commits since the last tag, grouped, to stdout
+
+The release page is built from this file (`build_exe.py --release-notes`), so what survives
+the editing is what players read.
+
+## [Unreleased]
+
+Nothing yet.
+
+## [0.6.0] - 2026-08-15
+
+### Added
+
+- **Full screen now works**, and on a screen larger than the game as well. Set the game's
+  own resolution first — **1920 × 1080** or **1600 × 900**, both in its own options — and the
+  client reads the picture at the size it was drawn, however far your desktop stretches it.
+  Measured over 15 confirmed chest lines, undoing the stretch costs about 0.016 of matching
+  score against a 0.60 threshold and changed no reading. A screen whose shape differs from
+  the game's (21:9, 16:10) still asks you to calibrate: the game may be letterboxing there,
+  and reading the wrong rows silently is worse than saying so.
+- Every button in the window says what it does when you hover over it.
+- Calibration for **1920x1080** now ships. A player at that size no longer has to calibrate,
+  and gets a fit that was replayed against real recordings rather than one improvised on
+  their machine.
+- The client now **checks what the game is set to render** and warns when that is smaller
+  than what it is reading. Enlarging cannot put back ink that was never drawn: at a 1280x720
+  game resolution one of those same 15 lines fell under the threshold, and an under-threshold
+  line is dropped rather than guessed.
+- Calibration for **1600x900** now ships as well, fitted from a real recording rather than
+  from shots taken standing still — the minimap it looks for is the button bar under the map,
+  not the map itself, which is what a calibration made on the spot had settled on.
+- Recordings are saved under the resolution they were made at —
+  `capture/1920x1080/session-…` — because everything about reading a frame is fitted per
+  resolution, and a folder of mixed sizes has to be sorted before any question can be asked
+  of it.
+- `verify` shows **pickaxe breaks** and asks whether each one really happened. A false break
+  spends a pickaxe the player still has, and it was the one reading the tool could not see.
+- `verify` shows **what you confirmed** beside what the client reads now, with a
+  `13 match, 1 differ` count at the end — a re-read of a confirmed session is the only
+  regression figure there is. `--differing` asks only about the ones that changed.
+- The window writes a **log file** at startup, honouring the trace setting. The released
+  client never wrote one: it entered through the window, and the window set up a console
+  logger in a build that has no console.
+- In a source checkout, each reading on the record page names the frame it came from
+  (`[episode-211/f_00109.png]`). Mining readings carry that frame too, which they never did.
+
+### Changed
+
+- **The "A pickaxe broke" button is gone.** The client reads the break message itself at
+  every size it ships a calibration for, and a button that duplicates a reading is a second
+  source of truth for the number every mining rate divides by.
+- The guide names the sizes that work and the one that does not (**1280 × 720**, where the
+  game draws the names with too little detail to read), and says which are landscape and
+  which is the tall window.
+- The item vocabulary now carries only what a dungeon can hand over — 2,154 names, exactly
+  what the client has always narrowed to before reading anything. The download is smaller and
+  nothing about recognition changes.
+- The window no longer prints "unofficial" beside its own name on every screen. It says it
+  once, on the Settings page, where a player goes to find out what the program is.
+- The pickaxe count stays editable while recording. Restocking happens mid-dive, and the
+  correction now reaches the running reader instead of being overwritten by the next break.
+- The frame counter on the record page is a source-checkout thing again. The released exe
+  carries the development marker on purpose, which had been showing it to everyone.
+- Calibration takes a short **burst** of walking shots rather than one, and asks you to keep
+  walking. One picture cannot tell the minimap's furniture from its map, and the map is the
+  half that must never be matched.
+
+### Fixed
+
+- **Opening a chest could freeze capture for up to nine seconds**, and the chest's own drop
+  lines were never sampled because nothing was. The chest's 「だれが開ける？」 prompt looks
+  exactly like a mining panel, and fitting one costs an index build per geometry tried.
+- **Mining at 1920x1080**: ore lines went missing, and pickaxe breaks were not detected at
+  all. Panel rows are anchored differently at different resolutions, and the search now
+  covers that rather than assuming it.
+- **A chest read one item short** when its message wrapped onto a second row, and the
+  client's own letter spacing was fitted on a name too short to measure it.
+- **A chest could be recorded as empty** while the line was plainly there on the frame, at a
+  resolution the player had calibrated themselves. Calibration checks its fit by reading back
+  the name you gave it, and two geometries can read that name equally well while only one of
+  them reads a name written in digits — 「10,000バイン紙幣」 scored 0.5982 under one and
+  0.8536 under the other. Calibration now looks past its own name when the check is close.
+- **Quantities**: `×10` came back as unknown, a two-digit number could lose its first digit,
+  and `×13` could be read confidently as `×18` — a screenshot widens a stroke by about a
+  pixel, which is the whole difference between one digit and another.
+- **The last chest of a session** was stamped `00:00` when you stopped the recording while
+  it was still being read — before every chest that preceded it.
+- `verify` treated every mining swing in a session as the same entry, so confirming the
+  first marked all the rest confirmed without ever showing them.
+- A calibration that ships now replaces a stale local one for that size without discarding
+  the mining panel's geometry, which is learned on the player's machine and cannot ship.
+
+## [0.5.3] - 2026-08-13
+
+### Added
+
+- A rotating log at `%LOCALAPPDATA%\wddrop\logs`, INFO by default and DEBUG when the trace
+  setting is on, so a missed drop can be explained after the fact.
+- One request to GitHub when the window opens, asking whether a newer build exists. It
+  carries nothing about the player or their game, and *Settings → New versions* stops it
+  being made at all.
+- **See it** — draws the regions the client reads and the strips it actually receives.
+- The stats page separates currency from items and shows every duration as MM:SS.
+
+### Changed
+
+- The answer space is the 2,154 names a chest can contain rather than all 3,268 — mission
+  passes, skill books, NPC gear and event stock cannot come out of a chest.
+- Calibration at 1920x1080 finds the minimap and fits the band against its own typeface.
+
+### Fixed
+
+- Letter spacing is a full-width correction, so `10,000バイン紙幣` reads. It was being
+  applied to half-width glyphs as well, which pushed every ASCII name out of alignment.
+
+## [0.5.2] - 2026-08-13
+
+### Fixed
+
+- The mining panel is rendered at its **own** letter spacing rather than the message band's.
+  Spacing is added per character, so the error accumulates along the line and the damage is a
+  function of name length: on one real panel 「ウロボロス鉱石」 scored 0.5595 against a 0.60
+  gate while 「透明な小石」 beside it read 0.706, and the yield was recorded with that line
+  simply missing. Fitted rather than inherited, the same two lines read 0.847 and 0.895.
+  Replayed over seven recorded sessions: every panel line read, and both pickaxe breaks still
+  counted.
+
+---
+
+Versions before 0.5.2 were built and tested but never published, so they are not listed here.
+
+[0.6.0]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.6.0
+[0.5.3]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.5.3
+[0.5.2]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.5.2

@@ -48,7 +48,8 @@ from uuid import uuid4
 from . import theme
 from .items import droppable
 from .config import (AUTOMATIC_MODES, CLIENT_VERSION, SEND_BATCH, SEND_EACH, SEND_MANUAL,
-                     ClientConfig, config_dir, data_dir, in_development, program_dir,
+                     ClientConfig, config_dir, data_dir, in_checkout,
+                     in_development, program_dir,
                      records_path, spool_path)
 from .i18n import LOCALES, NATIVE_NAMES, Translator, system_locale
 
@@ -136,7 +137,10 @@ class CaptureWorker(QtCore.QThread):
             source = open_source(
                 self.args.source, fps=self.args.fps,
                 strips=_capture_strips(profile, bool(self.args.record)),
-                expect_size=tuple(profile.frame_size),
+                # The window's own size, which in borderless fullscreen is the desktop's
+                # rather than the calibration's; `profile_size` is what the frames become.
+                expect_size=size or tuple(profile.frame_size),
+                profile_size=tuple(profile.frame_size),
             )
             # Building the render index takes several seconds over a few thousand
             # candidates. It happens HERE rather than on the GUI thread, which is why the
@@ -184,33 +188,40 @@ class CaptureWorker(QtCore.QThread):
 
 
 class ShotWorker(QtCore.QThread):
-    """Takes one screenshot of the game window after a countdown.
+    """Takes screenshots of the game window after a countdown.
 
     On its own thread because the countdown is the point: the player has to switch back to
     the game, so the window must keep repainting while it runs. Sleeping on the GUI thread
     would freeze the very countdown it is displaying.
+
+    `count` above one takes a BURST, a moment apart. The walking shot needs it: the frames
+    are compared with each other to find the part of the minimap panel that is furniture
+    rather than map, and one picture cannot show that. See calibration.choose_hud_region.
     """
 
     tick = QtCore.Signal(int)
     shot = QtCore.Signal(str)
     failed = QtCore.Signal(str)
 
-    def __init__(self, delay: float, path: Path, parent=None):
+    def __init__(self, delay: float, path: Path, parent=None, count: int = 1):
         super().__init__(parent)
         self.delay = delay
         self.path = path
+        self.count = count
 
     def run(self) -> None:                     # noqa: D102
         import time
 
         try:
-            from .__main__ import _grab_window
+            from .__main__ import WALK_GAP, _burst_paths, _grab_window
 
             for remaining in range(int(self.delay), 0, -1):
                 self.tick.emit(remaining)
                 time.sleep(1)
-            image = _grab_window(0)
-            image.save(self.path)
+            for i, where in enumerate(_burst_paths(self.path, self.count)):
+                if i:
+                    time.sleep(WALK_GAP)
+                _grab_window(0).save(where)
         except Exception as exc:                       # noqa: BLE001
             self.failed.emit(str(exc))
             return
@@ -246,6 +257,7 @@ class FitWorker(QtCore.QThread):
             # the second pass — the one that fits the NAME's own pixels — never runs at all.
             # Measured on a real Japanese shot: pass one alone chose 24px/+1.6 and scored
             # 0.509, which then failed the profile's own self-check and refused to save.
+            findings: list[str] = []
             profile = fit_message_profile(
                 Image.open(self.drop), self.name, _prefix_from(fmt),
                 _band_font_candidates(self.args), droppable(vocab.entries),
@@ -253,8 +265,23 @@ class FitWorker(QtCore.QThread):
                 suffix=_suffix_from(fmt), separator=_separator_from(raw),
             )
             if self.walk:
-                profile = fit_hud(profile, Image.open(self.walk),
+                # THE WHOLE BURST, and the drop shot as the negative — the same three things
+                # the command line passes. This worker has already drifted from that path once
+                # (it fitted without the suffix and separator, see above), and the cost of
+                # drifting here is a template cut from the map interior: a HUD detector that
+                # never fires, episodes that never close, and a dive recorded as one chest.
+                from .__main__ import WALK_BURST, _burst_paths
+
+                walking = [Image.open(p) for p in _burst_paths(Path(self.walk), WALK_BURST)
+                           if p.exists()]
+                profile = fit_hud(profile, walking, absent=Image.open(self.drop),
                                   template_path=Path(self.args.data) / "hud_template.png")
+                # THE CHECKS THE COMMAND LINE HAS ALWAYS PRINTED. They are the ones that
+                # catch a template cut from a wall — the failure that records a whole dive
+                # as one chest — and this path did not have them for three versions.
+                from .calibration import hud_findings
+
+                findings = hud_findings(profile, walking[0], Image.open(self.drop))
             root = Path(self.args.data)
             store = ProfileStore.load(root)
             store.put(profile)
@@ -265,6 +292,7 @@ class FitWorker(QtCore.QThread):
             self.failed.emit(str(exc))
             return
         self.done.emit({
+            "findings": findings,
             "size": ProfileStore.key_for(profile.frame_size),
             "font_size": profile.font_size,
             "score": profile.calibration_score,
@@ -381,6 +409,7 @@ class ConsentPage(QtWidgets.QWidget):
         row = QtWidgets.QHBoxLayout()
         row.addStretch(1)
         self.button = QtWidgets.QPushButton(self.t("Continue"))
+        self.button.setToolTip(self.t('Go on to the next step.'))
         self.button.setObjectName("primary")
         self.button.setEnabled(False)
         self.agree.toggled.connect(self.button.setEnabled)
@@ -456,6 +485,7 @@ class SeeingDialog(QtWidgets.QDialog):
         row.addWidget(self.mode)
         row.addStretch(1)
         close = QtWidgets.QPushButton(self.t("Close"))
+        close.setToolTip(self.t('Close this window. Nothing is lost.'))
         close.clicked.connect(self.accept)
         row.addWidget(close)
         layout.addLayout(row)
@@ -472,18 +502,32 @@ class SeeingDialog(QtWidgets.QDialog):
 
     def _grab(self) -> None:
         """One whole frame, not the strips — the point is to see what the strips LEAVE OUT."""
-        try:
-            from .__main__ import _live_size, _select_profile
-            from .capture.source import open_source
+        from .__main__ import _live_size, _select_profile
+        from .capture.source import open_source
 
+        try:
             size = _live_size(self.args)
-            self._profile = _select_profile(self.args, size)
-            self._frame = next(open_source(self.args.source, fps=1).frames()).image
+            frame = next(open_source(self.args.source, fps=1).frames()).image
         except Exception as exc:                       # noqa: BLE001
             self._frame = None
             self.note.setText(self.t("No game window yet: {why}", why=str(exc)))
             self.view.clear()
             return
+        try:
+            self._profile = _select_profile(self.args, size)
+        except SystemExit as exc:
+            # NOT `except Exception`. `_select_profile` says "no calibration for this size"
+            # by raising SystemExit — it is written for the command line, where that IS the
+            # message — and SystemExit is not an Exception, so it went straight through this
+            # handler and out of a Qt slot. The window closed on a player who pressed a
+            # button to be told something.
+            self._frame = None
+            self.note.setText(self.t(
+                "No calibration for {size} yet. Calibrate at this size, then look again.",
+                size=f"{size[0]}x{size[1]}" if size else "?"))
+            self.view.clear()
+            return
+        self._frame = frame
         self._draw()
 
     def _draw(self) -> None:
@@ -536,8 +580,9 @@ class CalibrateDialog(QtWidgets.QDialog):
 
         layout = QtWidgets.QVBoxLayout(self)
         self.step = QtWidgets.QLabel(self.t(
-            "Step 1 of 2 — stand in a dungeon with the minimap visible, then press Capture.\n"
-            "You will have a few seconds to switch back to the game."))
+            "Step 1 of 2 — walk around a dungeon with the minimap visible, then press "
+            "Capture.\nYou will have a few seconds to switch back — keep walking while it "
+            "takes the shots."))
         self.step.setWordWrap(True)
         layout.addWidget(self.step)
 
@@ -559,10 +604,20 @@ class CalibrateDialog(QtWidgets.QDialog):
 
         row = QtWidgets.QHBoxLayout()
         self.skip = QtWidgets.QPushButton(self.t("Skip this shot"))
+        self.skip.setToolTip(self.t('Carry on without this picture. The step it was for is left unfitted.'))
         self.skip.clicked.connect(self._skip)
         row.addWidget(self.skip)
+        # THE SHOT FROM LAST TIME, when there is one. Calibration is re-run for reasons that
+        # have nothing to do with the pictures — a fit refused, a size changed, a reader
+        # improved — and re-taking them means going back into the game, standing in a
+        # dungeon and opening another chest each time. The files are already here.
+        self.load = QtWidgets.QPushButton(self.t("Use the saved shot"))
+        self.load.setToolTip(self.t('Use the picture already on disk from an earlier calibration instead of taking a new one.'))
+        self.load.clicked.connect(self._use_saved)
+        row.addWidget(self.load)
         row.addStretch(1)
         self.action = QtWidgets.QPushButton(self.t("Capture"))
+        self.action.setToolTip(self.t('Take the picture now. Set the game up first — this reads whatever is on screen.'))
         self.action.clicked.connect(self._capture)
         row.addWidget(self.action)
         layout.addLayout(row)
@@ -579,8 +634,15 @@ class CalibrateDialog(QtWidgets.QDialog):
         and the crash that follows arrives after the dialog is gone, where nothing connects
         it to the calibration the player was in the middle of.
         """
-        for widget in (self.action, self.skip):
+        for widget in (self.action, self.skip, self.load):
             widget.setEnabled(not working)
+        # THE NAME BOX TOO, while the guess is running. It is filled in by the reader when it
+        # finishes, and a player typing into it meanwhile is either about to have their
+        # answer kept (and wonder why the box stopped accepting) or about to lose it. Locked
+        # and then given the focus back, so the box is live exactly when it is theirs.
+        self.name.setEnabled(not working)
+        if not working and self.name.isVisible():
+            self.name.setFocus()
         self._working = working
 
     def closeEvent(self, event) -> None:                # noqa: D102 (Qt override)
@@ -594,15 +656,58 @@ class CalibrateDialog(QtWidgets.QDialog):
         return str(Path(self.args.data) / ("walk.png" if not self._walk_done else "drop.png"))
 
     def _capture(self) -> None:
+        from .__main__ import WALK_BURST
+
         path = Path(self._shot_target())
         self.action.setEnabled(False)
         self.skip.setEnabled(False)
-        self._worker = ShotWorker(self.args.delay, path, self)
+        # The walking step is a burst; the drop message is one frame and must be, since it is
+        # the line being read and the player is holding it on screen.
+        self.load.setEnabled(False)
+        self._worker = ShotWorker(self.args.delay, path, self,
+                                  count=1 if self._walk_done else WALK_BURST)
         self._worker.tick.connect(
             lambda n: self.status.setText(self.t("switching back to the game… {n}", n=n)))
         self._worker.shot.connect(self._got_shot)
         self._worker.failed.connect(self._error)
         self._worker.start()
+
+    def _shot_problem(self, path: str) -> str | None:
+        """What is wrong with this screenshot, in the words the command line uses."""
+        from PIL import Image
+
+        from .__main__ import _drop_shot_problem, _walk_shot_problem
+
+        check = _walk_shot_problem if not self._walk_done else _drop_shot_problem
+        try:
+            with Image.open(path) as shot:
+                return check(shot.convert("L"))
+        except Exception as exc:                       # noqa: BLE001
+            return str(exc)
+
+    def _use_saved(self) -> None:
+        """Take this step's shot from disk instead of from the game.
+
+        The same file the guided capture would have written, so everything downstream is
+        unchanged — including the walking BURST, which the fit picks up beside walk.png when
+        it is there.
+        """
+        path = Path(self._shot_target())
+        if not path.exists():
+            self.status.setText(self.t("No saved shot here yet — capture one."))
+            return
+        try:
+            from PIL import Image
+
+            with Image.open(path) as shot:
+                size = f"{shot.size[0]}x{shot.size[1]}"
+        except Exception:                              # noqa: BLE001
+            size = "?"
+        # SAID OUT LOUD, because a saved shot can be from another resolution and the fit it
+        # produces belongs to THAT one, not to the window open now.
+        self.status.setText(self.t("using the saved {name} ({size})",
+                                   name=path.name, size=size))
+        self._got_shot(str(path))
 
     def _skip(self) -> None:
         if not self._walk_done:
@@ -619,9 +724,18 @@ class CalibrateDialog(QtWidgets.QDialog):
     def _got_shot(self, path: str) -> None:
         self.action.setEnabled(True)
         self.skip.setEnabled(True)
+        self.load.setEnabled(True)
         pix = QtGui.QPixmap(path)
         self.preview.setPixmap(pix.scaled(480, 160, QtCore.Qt.KeepAspectRatio,
                                           QtCore.Qt.SmoothTransformation))
+        # LOOKED AT BEFORE IT IS USED, as the command line has always done: it refuses a
+        # drop shot with no message on it and offers another go. Here it is a warning rather
+        # than a refusal — the player can see the preview and decide — but saying nothing
+        # turns "there was no message in that screenshot" into a fit that fails minutes
+        # later with a number instead of a reason.
+        problem = self._shot_problem(path)
+        if problem:
+            self.status.setText(f"[!] {problem}")
         if not self._walk_done:
             self.walk = Path(path)
             self._walk_done = True
@@ -713,6 +827,18 @@ class CalibrateDialog(QtWidgets.QDialog):
             + (f" ({self.t('margin')} {margin:+.4f})" if margin is not None else "")
             + ("" if result["hud"]
                else "\n" + self.t("No HUD template — chest bracketing will be poor.")))
+        # EVERYTHING THAT IS WRONG WITH IT, said here rather than discovered in a session.
+        # A fit can pass its own check and still be built on a pair of shots that cannot
+        # bracket a chest between them.
+        trouble = list(result.get("findings") or [])
+        if notes.get("name_ends_at") is None:
+            trouble.append(self.t(
+                "that message wrapped onto a second line, so the fit had less to go on. If "
+                "readings look poor later, calibrate again on a chest whose whole sentence "
+                "fits on one row."))
+        if trouble:
+            self.status.setText(self.status.text() + "\n"
+                                + "\n".join(f"[!] {line}" for line in trouble))
         self.action.setText(self.t("Done"))
         self.action.setEnabled(True)
         self.action.clicked.disconnect()
@@ -771,6 +897,22 @@ class UploadWorker(QtCore.QThread):
             self.failed.emit(str(exc))
             return
         self.done.emit(result)
+
+
+def _frame_note(line: dict) -> str:
+    """`[episode-211/f_00109.png]` after a reading, in a checkout only.
+
+    Every recognised line already carries the frame it was read from — the CLI prints it and
+    the record carries it as `source_frame`. The window did not show it, so the one question
+    a recording exists to answer ("which frame was that, then?") meant opening the spool by
+    hand and matching timestamps.
+
+    Behind `in_checkout` rather than `in_development`, like the frame counter: the released
+    exe carries the development marker on purpose, and a player has no use for a filename
+    inside a folder they were never asked to look in.
+    """
+    src = line.get("source_frame")
+    return f"  [{src}]" if src and in_checkout() else ""
 
 
 def mmss(seconds) -> str:
@@ -1116,12 +1258,6 @@ class MainWindow(QtWidgets.QMainWindow):
         wordmark = QtWidgets.QLabel(self.t(APP_NAME))
         wordmark.setObjectName("wordmark")
         top.addWidget(wordmark)
-        # Said plainly, and next to the name rather than buried in the guide: this leads with
-        # a game's title, and nobody should have to wonder whether it came from the people
-        # who made the game.
-        unofficial = QtWidgets.QLabel(self.t("unofficial"))
-        unofficial.setObjectName("meta")
-        top.addWidget(unofficial)
         top.addStretch(1)
         self.nav = {}
         for index, key in ((0, "Record"), (1, "Stats"), (2, "Guide"), (3, "Settings")):
@@ -1259,22 +1395,21 @@ class MainWindow(QtWidgets.QMainWindow):
         fl.setContentsMargins(20, 14, 20, 14)
         fl.setSpacing(10)
         self.start = QtWidgets.QPushButton(self.t("Start recording"))
+        self.start.setToolTip(self.t('Begin reading the game window. Chests and veins are recorded as they happen.'))
         self.start.setObjectName("primary")
         self.start.clicked.connect(self._toggle)
         fl.addWidget(self.start)
         self.mark = QtWidgets.QPushButton(self.t("Mark next dive"))
+        self.mark.setToolTip(self.t('Say that the next chest belongs to a new dive, when the client cannot see the change itself.'))
         self.mark.clicked.connect(self._mark_dive)
         self.mark.setEnabled(False)
         fl.addWidget(self.mark)
-        self.broke = QtWidgets.QPushButton(self.t("A pickaxe broke"))
-        self.broke.clicked.connect(self._pickaxe_broke)
-        self.broke.setEnabled(False)
-        fl.addWidget(self.broke)
         fl.addStretch(1)
         self.spool_label = QtWidgets.QLabel("")
         self.spool_label.setObjectName("hint")
         fl.addWidget(self.spool_label)
         self.upload = QtWidgets.QPushButton(self.t("Upload"))
+        self.upload.setToolTip(self.t('Send what is waiting to the study. Nothing leaves this computer until you press it.'))
         self.upload.clicked.connect(self._upload)
         fl.addWidget(self.upload)
         layout.addWidget(foot)
@@ -1370,6 +1505,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stats_note.setWordWrap(True)
         fl.addWidget(self.stats_note, 1)
         refresh = QtWidgets.QPushButton(self.t("Refresh"))
+        refresh.setToolTip(self.t('Re-read your own records and redraw this page.'))
         refresh.clicked.connect(self._refresh_stats_page)
         fl.addWidget(refresh)
         layout.addWidget(foot)
@@ -1701,6 +1837,7 @@ class MainWindow(QtWidgets.QMainWindow):
             cal = QtWidgets.QHBoxLayout()
             cal.addWidget(self.cal_label, 1)
             self.cal_button = QtWidgets.QPushButton(self.t("Calibrate…"))
+            self.cal_button.setToolTip(self.t('Teach the client to read a window size it does not already know. Existing calibrations are kept.'))
             self.cal_button.clicked.connect(self._calibrate)
             cal.addWidget(self.cal_button)
             # Beside calibration because it is how you tell whether a calibration is any
@@ -1708,6 +1845,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # to the minimap, and the stored HUD template was a photograph of a wall — a
             # thing no score reported and one glance would have.
             self.seeing_button = QtWidgets.QPushButton(self.t("See it…"))
+            self.seeing_button.setToolTip(self.t('Draw what the client is looking at on top of the game, so you can check it is reading the right places.'))
             self.seeing_button.clicked.connect(self._see)
             cal.addWidget(self.seeing_button)
             holder = QtWidgets.QWidget()
@@ -1733,6 +1871,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.folder_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         folder.addWidget(self.folder_label, 1)
         open_folder = QtWidgets.QPushButton(self.t("Open folder"))
+        open_folder.setToolTip(self.t('Open the folder holding everything this client has kept.'))
         open_folder.clicked.connect(self._open_data_folder)
         folder.addWidget(open_folder)
         holder = QtWidgets.QWidget()
@@ -1801,6 +1940,17 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow(self.t("Detailed log"), holder)
         self._show_log_path()
 
+        # WHO MADE THIS, at the foot of the page rather than beside the game's name in the
+        # ribbon. It was in the header, where it sat next to a title nobody could mistake for
+        # anything else and repeated itself on every screen; here it is stated once, where a
+        # player looking for what this program is goes anyway.
+        about = QtWidgets.QLabel(self.t(
+            "A fan-made tool. It is not made by, endorsed by, or connected to the makers of "
+            "the game."))
+        about.setObjectName("hint")
+        about.setWordWrap(True)
+        form.addRow(self.t("About"), about)
+
         self._no_wheel(self.send_mode, self.ui_locale, self.fps)
 
         scroll = QtWidgets.QScrollArea()
@@ -1814,6 +1964,7 @@ class MainWindow(QtWidgets.QMainWindow):
         fl = QtWidgets.QHBoxLayout(foot)
         fl.setContentsMargins(20, 14, 20, 14)
         export = QtWidgets.QPushButton(self.t("Export my data…"))
+        export.setToolTip(self.t('Write your records to a CSV file you choose, to keep or to look at elsewhere.'))
         export.clicked.connect(self._export)
         fl.addWidget(export)
         fl.addStretch(1)
@@ -1916,6 +2067,13 @@ class MainWindow(QtWidgets.QMainWindow):
     def _pickaxes_changed(self, value: int) -> None:
         self.cfg.pickaxes = int(value)
         self.cfg.save()
+        # THE RUNNER IS TOLD TOO, when one is running. Restocking happens mid-dive — that is
+        # what a town trip in the middle of a mining session IS — and the runner keeps its own
+        # copy to count breaks down from, so correcting the box while recording would
+        # otherwise be undone by the next break.
+        runner = getattr(self.worker, "runner", None) if self.worker is not None else None
+        if runner is not None and getattr(runner, "pickaxes_left", None) is not None:
+            runner.pickaxes_left = int(value)
         self._refresh_pickaxes()
 
     def _record_changed(self, _checked: bool) -> None:
@@ -2138,7 +2296,6 @@ class MainWindow(QtWidgets.QMainWindow):
         mining = self.dungeon.currentData() in MINING_DUNGEON_IDS
         for widget in (self.pickaxe_caption, self.pickaxes, self.pickaxe_label):
             widget.setVisible(mining)
-        self.broke.setVisible(mining)
         if mining:
             self._refresh_pickaxes()
 
@@ -2237,7 +2394,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.start.style().polish(self.start)
         self._set_setup_enabled(False)
         self.mark.setEnabled(True)
-        self.broke.setEnabled(True)
         self.worker = CaptureWorker(self.cfg, args, self)
         self.worker.chest.connect(self._chest)
         self.worker.pickaxe.connect(self._pickaxe)
@@ -2250,8 +2406,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.timer.start()
 
     def _set_setup_enabled(self, enabled: bool) -> None:
+        """Lock the things that describe the RUN while it is running.
+
+        The pickaxe count is not one of them. It is a fact about the player's bag rather than
+        a setting for the session — they restock in town mid-dive, and they notice a wrong
+        count precisely when they watch it tick down — so it stays editable throughout, and
+        `_pickaxes_changed` carries the correction into the runner.
+        """
         for widget in (self.dungeon, self.floor, self.fps, self.record,
-                       self.record_all, self.pickaxes, self.upload,
+                       self.record_all, self.upload,
                        self.ui_locale, self.share, self.send_mode, self.cal_button):
             if widget is not None:                     # the calibrate button is dev-only
                 widget.setEnabled(enabled)
@@ -2314,6 +2477,7 @@ class MainWindow(QtWidgets.QMainWindow):
         names = self._item_names()
         items = " · ".join(
             f"{names.display(c)} ×{c['quantity']}" + ("?" if c.get("qty_unknown") else "")
+            + _frame_note(c)
             for c in event.get("contents", []))
         qc = event.get("qc") or {}
         unread = qc.get("panel_lines_unread")
@@ -2411,7 +2575,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # THE FRAME COUNT IS OURS, NOT THE PLAYER'S. It answers "is the loop sampling",
         # which is a question about this program rather than about their dive, and it sits
         # in the one line the record page uses to say whether anything is working.
-        counted = (f"{stats.get('frames', 0)} frames   " if in_development() else "")
+        #
+        # Gated on the CHECKOUT, not on `in_development`: the released exe carries the
+        # development marker on purpose, so that gate showed this to everyone who downloaded
+        # it — reported, reasonably, as a debug number shipping to players.
+        counted = (f"{stats.get('frames', 0)} frames   " if in_checkout() else "")
         self.counters.setText(
             f"{self._elapsed()}   {counted}"
             f"{self.chests} {self.t('chest')}   {self.mined} {self.t('vein')}")
@@ -2436,7 +2604,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.start.style().polish(self.start)
         self.start.setEnabled(True)
         self.mark.setEnabled(False)
-        self.broke.setEnabled(False)
         self._set_setup_enabled(True)
         self._say(self.t("Stopped. {chests} {chest}, {mined} {vein}.",
                          chests=self.chests, chest=self.t("chest"),
@@ -2454,7 +2621,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.start.setText(self.t("Start recording"))
         self.start.setEnabled(True)
         self.mark.setEnabled(False)
-        self.broke.setEnabled(False)
         self._set_setup_enabled(True)
         self._say(message, "attention")
 
@@ -2613,31 +2779,32 @@ def guide_html(t, data: Path) -> str:
       </ul>
       <p>{t('With these on, a drop line appears complete instead of being drawn one '
             'character at a time. That matters more than it sounds: this client reads '
-            'whatever is on screen, and a half-drawn line is a confident wrong answer '
-            'rather than a near miss — 191 item names truncate into a different valid '
-            'name.')}</p>
-      <h2 style="color:{theme.VELLUM};">{t('Play in the tall window')}</h2>
-      <p><b>704 × 1241</b> — {t('the size this client is set up for. Nothing to configure: '
-            'it already knows how to read that window.')}</p>
-      <ol>
-        <li>{t('In the game: Options → turn Fullscreen OFF, and close the panel to apply.')}</li>
-        <li>{t('Set the window to 704 × 1241 with {tool}. The game has no such option, and '
-               'that tool is the only way to get this shape — it is a small free utility by '
-               'NowvaB that resizes the game window and nothing else. It is not ours and '
-               'not bundled here.',
-               tool=f'<a href="{WINDOW_TOOL_URL}" style="color:{theme.VELLUM};">WVDWS</a>')}</li>
-      </ol>
-      <p>{t('At any other size, including full screen, some item names are misread. If you '
-            'play at a different one, please say so — a short recording is what makes it '
-            'fixable.')}</p>
+            'whatever is on screen, and a half-drawn line is read as a different item '
+            'rather than as a near miss.')}</p>
+      <h2 style="color:{theme.VELLUM};">{t('Play at a size this client knows')}</h2>
+      <p><b>1920 × 1080</b> {t('landscape')} · <b>1600 × 900</b> {t('landscape')} —
+          {t('both are options in the game itself, under Screen size, and both are read '
+             'without any setup here.')}</p>
+      <p>{t('Full screen is fine at those sizes. The game keeps drawing at the size you '
+            'chose and Windows stretches it to fill your screen; this client reads the '
+            'picture at the size it was drawn.')}</p>
+      <p>{t('Choose the size in the game before going full screen, though. Full screen '
+            'enlarges whatever the game draws, and enlarging cannot put back detail that '
+            'was never drawn.')}</p>
+      <p><b>1280 × 720</b> {t('landscape')} — {t('not supported. At that size the game '
+            'draws the names with too little detail to read reliably, and a line this '
+            'client cannot read is left out rather than guessed at.')}</p>
+      <p><b>704 × 1241</b> {t('portrait')} — {t('a tall window, if you prefer it. The game has no such '
+            'option, so it needs {tool}: a small free utility by NowvaB that resizes the '
+            'game window and nothing else. It is not ours and not bundled here.',
+            tool=f'<a href="{WINDOW_TOOL_URL}" style="color:{theme.VELLUM};">WVDWS</a>')}</p>
       <h2 style="color:{theme.VELLUM};">{t('While you play')}</h2>
       <ol>
         <li><b>{t('Pick the right dungeon.')}</b>
         {t('It is the one thing this window cannot check for you, and every chest is filed '
            'under it.')}</li>
         <li><b>{t('Chests: let each line finish before advancing.')}</b>
-        {t('191 item names truncate into a different valid name, so a half-read line is a '
-           'confident wrong answer, not a near miss.')}</li>
+        {t('A half-read line is recorded as a different item, not as a near miss.')}</li>
         <li><b>{t('Veins: wait for the ▼.')}</b>
         {t('It means the panel has finished and the swing has been recorded. Dismiss before '
            'it appears and that swing is lost.')}</li>
@@ -2663,12 +2830,27 @@ def guide_html(t, data: Path) -> str:
 
 
 def main(argv=None) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    """THE WINDOW'S OWN ENTRY POINT, and the one the exe runs.
+
+    It used to call `logging.basicConfig`, which writes to a console — and a windowed build
+    has none, so **the released exe never wrote a log line in its life**. The file logging
+    lives in `__main__.main`, which the exe does not go through: `build_exe`'s entry script
+    calls this function directly.
+
+    The setting was half-wired for the same reason. `logs.configure` ran only when the trace
+    checkbox was TOGGLED, so a player who had turned trace on in an earlier session opened
+    the window with it ticked and got nothing — which is precisely how it was reported. The
+    setting is applied here, at startup, where every other setting is.
+    """
+    from . import logs
+
+    cfg = ClientConfig.load()
+    logs.configure(trace=bool(getattr(cfg, "trace", False)))
     theme.install_message_filter()
     app = QtWidgets.QApplication(list(argv or []))
     theme.apply_style(app)
     theme.apply_font(app)
     theme.apply_icon(app)
-    window = MainWindow(ClientConfig.load())
+    window = MainWindow(cfg)
     window.show()
     return app.exec()
