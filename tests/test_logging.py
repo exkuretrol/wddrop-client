@@ -162,15 +162,18 @@ def test_the_window_configures_the_LOG_FILE_at_startup_not_a_console():
 
     Checked on the source rather than by running Qt: the property is which call is in there,
     and a headless Qt run would test the harness more than the client.
+
+    Read from the FILE rather than through an import, which is not fussiness — importing
+    `ui` pulls in PySide6, and the release job runs the suite on a machine that has none.
+    Guarding this with importorskip would have skipped it exactly where it matters: the job
+    that builds the exe whose log file this is about. It cost a failed release tag to notice.
     """
     import ast
-    import inspect
-    import textwrap
 
-    from wddrop_client import ui
-
-    tree = ast.parse(textwrap.dedent(inspect.getsource(ui.main)))
-    fn = tree.body[0]
+    source = (Path(__file__).resolve().parents[1]
+              / "client" / "wddrop_client" / "ui.py").read_text(encoding="utf-8")
+    fn = next(node for node in ast.parse(source).body
+              if isinstance(node, ast.FunctionDef) and node.name == "main")
     # The DOCSTRING is not the code, and it names both calls to explain the bug.
     if (fn.body and isinstance(fn.body[0], ast.Expr)
             and isinstance(fn.body[0].value, ast.Constant)):
