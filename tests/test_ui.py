@@ -1464,3 +1464,76 @@ def test_a_covered_ending_is_never_painted(app, home):
                for x in range(0, image.width(), 7)
                for y in range(0, image.height(), 3)), "something shows through the bar"
     window.close()
+
+
+def test_the_install_id_sits_under_the_same_bar_the_endings_do(app, home):
+    """It is the erase key, and Settings is the page a player photographs for a bug report.
+
+    Anyone holding the id can have that player's records erased — it is the only credential
+    the service has, because nothing else was ever stored. Printing it in full at the foot
+    of the page meant one shared screenshot was enough. It is covered by the same widget the
+    story endings use, and uncovering it is a click the player chooses to make.
+    """
+    from wddrop_client.ui import MainWindow, Spoiler
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window.pages.setCurrentIndex(3)
+    app.processEvents()
+
+    assert isinstance(window.ident, Spoiler)
+    assert window.ident.covered(), "the id is legible before anyone asks for it"
+    assert window.ident.text() == window.cfg.install_id, "the bar hides something else"
+    # Inert while covered: a drag must not be able to lift the text out from under the bar.
+    assert window.ident.textInteractionFlags() == QtCore.Qt.NoTextInteraction
+
+    window.ident.set_covered(False)
+    # Selectable is how it gets copied now that the buttons are gone.
+    assert window.ident.textInteractionFlags() == QtCore.Qt.TextSelectableByMouse
+    window.close()
+
+
+def test_a_covered_id_is_never_painted(app, home):
+    """Same guarantee as the endings: the bar is drawn instead of the text, not over it."""
+    from PySide6 import QtGui
+
+    from wddrop_client import theme
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window.pages.setCurrentIndex(3)
+    window.show()
+    for _ in range(3):
+        app.processEvents()
+
+    image = window.ident.grab().toImage()
+    bar = QtGui.QColor(theme.RULE).rgb()
+    assert image.width() > 0 and image.height() > 0
+    assert all(image.pixel(x, y) == bar
+               for x in range(0, image.width(), 7)
+               for y in range(0, image.height(), 3)), "the id shows through its own bar"
+    window.close()
+
+
+def test_leaving_settings_puts_the_id_back_under_its_bar(app, home):
+    """Uncovering it answers "I need it now", and that answer expires with the page.
+
+    Left up, it would still be there hours later when the player returns to Settings to
+    photograph something else — which is the exact moment the bar exists for. Re-covered on
+    every page change, so arriving at Settings looks the same whether or not it was opened
+    earlier in the session.
+    """
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window._show_page(3)
+    window.ident.set_covered(False)
+    assert not window.ident.covered()
+
+    window._show_page(1)
+    assert window.ident.covered(), "the id stayed legible after leaving the page"
+
+    window._show_page(3)
+    assert window.ident.covered(), "coming back showed it without being asked"
+    assert window.ident.textInteractionFlags() == QtCore.Qt.NoTextInteraction, \
+        "still selectable under its own bar"
+    window.close()

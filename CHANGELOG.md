@@ -21,6 +21,23 @@ the editing is what players read.
 
 Nothing yet.
 
+## [0.7.1] - 2026-08-16
+
+### Changed
+
+- **Your id is no longer printed on the Settings page.** It sits under a bar you click to
+  lift, the same one the story endings use, and it goes back under it as soon as you leave
+  the page. That id is the only thing the server can identify you by — nothing else about
+  you was ever stored — so anyone who has it can ask for your records to be deleted, and the
+  page it was printed on is the page people photograph when reporting a problem. Click it
+  when you need it; select it to copy it.
+- **Asking to be forgotten now takes effect at once and can still be undone for a week.**
+  Your records leave every statistic the moment you ask, and are wiped from the server seven
+  days later. Those days exist for exactly one reason: a deletion nobody meant — a mistyped
+  id, or someone else's — used to be permanent, because the client only ever re-sends what
+  is still waiting to be sent, never what has already gone.
+- The terms say both of those things now, so the client asks you to accept them again.
+
 ## [0.7.0] - 2026-08-16
 
 ### Added

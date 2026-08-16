@@ -67,7 +67,9 @@
 彙整後的統計結果將以匿名、聚合形式公開，供玩家社群參考。**不會**販售資料，**不會**提供給第三方廣告商。
 
 ### 9. 刪除權
-你可以隨時要求刪除自己的資料。客戶端會顯示你的 `install_id`，提出該識別碼即可要求移除對應的所有紀錄。刪除本機的資料夾則會移除這台電腦上的全部內容。
+你可以隨時要求刪除自己的資料。客戶端會顯示你的 `install_id`，提出該識別碼即可要求移除對應的所有紀錄。**提出後，這些紀錄會立刻從所有統計中消失，並在 7 天內從伺服器完全清除**——保留這幾天，是為了讓被誤刪或被他人冒用識別碼刪掉的紀錄還能救得回來。刪除本機的資料夾則會移除這台電腦上的全部內容。
+
+`install_id` 就是唯一的憑證：伺服器從來沒有保存過它，所以**任何人只要知道你的識別碼，就能要求刪掉你的紀錄**。請把它當成密碼看待，只在要求刪除時提供給我們。
 
 ### 10. 辨識會出錯
 掉落訊息是從畫面上「看」出來的，因此有可能讀錯或漏讀。程式在無法確定數量時會標記為不確定，而不是猜一個數字，但仍不保證完全正確。**你自己的紀錄請以遊戲內為準。**
@@ -98,7 +100,9 @@ This is an **unofficial, fan-made** statistics tool with **no affiliation to or 
 
 **Sharing is separate from recording, and is off until you turn it on.** Everything is recorded on your own computer either way; sharing only decides whether a copy is also sent. If you turn on *Keep the frames*, the captured images are stored in a folder on your computer so a mistake can be re-read and fixed later — **they are never uploaded**.
 
-The random install id is HMAC'd server-side with a server-only secret before storage and **cannot** be traced back to a game account. You may request deletion of your data at any time by quoting your install id; deleting the client's folder removes everything held on this computer.
+The random install id is HMAC'd server-side with a server-only secret before storage and **cannot** be traced back to a game account. You may request deletion of your data at any time by quoting your install id: the records leave every statistic immediately and are wiped from the server within 7 days — those few days exist so that a deletion nobody meant can still be undone. Deleting the client's folder removes everything held on this computer.
+
+Because the install id is the only credential that exists, **anyone who knows it can have your records deleted**. Treat it as a password: the window shows only the ends of it, and copies the whole thing to your clipboard when you need it.
 
 **Recognition can be wrong.** Drops are read off the screen, so a line can be misread or missed. Where the client cannot be sure of a quantity it marks it unknown rather than guessing — but treat the game itself as the authority on your own inventory.
 

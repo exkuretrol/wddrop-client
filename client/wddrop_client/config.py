@@ -28,7 +28,7 @@ APP_NAME = "wddrop"
 # the build that is SENDING. The release tag must say the same thing — CI refuses a tag that
 # disagrees, because a client that under-reports itself would be refused after the fix that
 # made it acceptable, and one that over-reports would be admitted before it.
-CLIENT_VERSION = "0.7.0"
+CLIENT_VERSION = "0.7.1"
 
 
 def config_dir() -> Path:

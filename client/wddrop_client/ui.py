@@ -1549,6 +1549,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pages.setCurrentIndex(index)
         for i, item in self.nav.items():
             item.set_current(i == index)
+        # THE ID GOES BACK UNDER ITS BAR whenever the page changes. Uncovering it is an
+        # answer to "I need it now", not a setting — left up, it would still be sitting
+        # there hours later when the player comes back to Settings to screenshot something
+        # else, which is the exact moment the bar exists for. Re-covering on every change
+        # rather than only on leaving: arriving at Settings should look the same whether or
+        # not it was visited earlier in the session.
+        ident = getattr(self, "ident", None)     # absent while the pages are still being built
+        if ident is not None:
+            ident.set_covered(True)
         if index == 1:
             self._refresh_stats_page()
 
@@ -2329,14 +2338,41 @@ class MainWindow(QtWidgets.QMainWindow):
         export.clicked.connect(self._export)
         fl.addWidget(export)
         fl.addStretch(1)
-        ident = QtWidgets.QLabel(self.t(
-            "Your id is {id} — quote it to have your data erased.",
-            id=self.cfg.install_id))
-        ident.setObjectName("erasure")
-        ident.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-        fl.addWidget(ident)
+        # MASKED, BECAUSE THIS IS THE ERASE KEY AND THIS PAGE GETS PHOTOGRAPHED.
+        # The id is the only credential the service has — nothing else was ever stored, so
+        # whoever holds it can have that player's records deleted, and at two players in the
+        # pool that is most of the study. It used to sit here in full, on the page people are
+        # asked to screenshot when something goes wrong. Now the screen shows the ends and
+        # the CLIPBOARD carries the whole thing, so quoting it is still one click and
+        # handing it out is deliberate rather than incidental.
+        #
+        # THE SAME BAR THE STORY ENDINGS USE, for the same reason and with no new controls:
+        # a thing you should see only when you have decided to. Two buttons to mask and copy
+        # taught the page a gesture it did not need — the bar already says "there is
+        # something here, and it is yours to uncover".
+        erasure = QtWidgets.QLabel(self.t("Quote your id to have your data erased."))
+        erasure.setObjectName("erasure")
+        fl.addWidget(erasure)
+        self.ident = Spoiler(self.cfg.install_id,
+                             self.t("Covered so a screenshot cannot give it away. Click to "
+                                    "show it."))
+        self.ident.setObjectName("erasure")
+        # One line, unlike the endings: a wrapped id turns a one-line bar into a two-line
+        # block the moment it is uncovered, and the footer jumps under the pointer that
+        # uncovered it. A UUID fits the row with room to spare.
+        self.ident.setWordWrap(False)
+        # Selectable ONLY once it is up, which is how it gets copied — the buttons are gone
+        # and select-and-copy is what a value on a page has always supported. While covered
+        # it stays inert, so a stray drag cannot lift text out from under the bar.
+        self.ident.covered_changed.connect(self._id_selectable)
+        self._id_selectable(True)
+        fl.addWidget(self.ident)
         layout.addWidget(foot)
         return page
+
+    def _id_selectable(self, covered: bool) -> None:
+        self.ident.setTextInteractionFlags(QtCore.Qt.NoTextInteraction if covered
+                                           else QtCore.Qt.TextSelectableByMouse)
 
     # -- guide page ----------------------------------------------------------------
     def _dress(self, dialog) -> None:

@@ -488,12 +488,42 @@ STRINGS: dict[str, dict[str, str]] = {
         "ja": "…歩行中のフレームも含める（かなり大きくなります。取りこぼしの調査用）",
         "ko": "…걷는 동안의 프레임도 포함（훨씬 커집니다. 누락을 조사할 때）",
         "de": "…auch die Laufbilder (viel größer; um einen Fehlschlag zu untersuchen)"},
-    "Your id is {id} — quote it to have your data erased.": {
-        "zh_tw": "你的識別碼是 {id} — 提出此碼即可要求刪除你的資料。",
-        "zh_cn": "你的识别码是 {id} — 提出此码即可要求删除你的数据。",
-        "ja": "あなたの ID は {id} です — データの削除を求めるときに提示してください。",
-        "ko": "당신의 ID는 {id} 입니다 — 데이터 삭제를 요청할 때 알려주세요.",
-        "de": "Deine ID ist {id} — nenne sie, um deine Daten löschen zu lassen."},
+    "your data erased.": {
+        "zh_tw": "把你的識別碼複製到剪貼簿，方便你貼進刪除資料的請求裡。",
+        "zh_cn": "把你的识别码复制到剪贴板，方便你贴进删除数据的请求里。",
+        "ja": "IDをクリップボードにコピーします。データ削除の依頼に貼り付けられます。",
+        "ko": "ID를 클립보드에 복사합니다. 데이터 삭제 요청에 붙여 넣을 수 있습니다.",
+        "de": "Legt deine ID in die Zwischenablage, damit du sie in eine "
+    "Löschanfrage einfügen kannst."},
+    "can have your records erased.": {
+        "zh_tw": "在畫面上顯示完整的識別碼。截圖請小心：拿到它的人就能要求刪掉你的紀錄。",
+        "zh_cn": "在画面上显示完整的识别码。截图请小心：拿到它的人就能要求删掉你的记录。",
+        "ja": "IDの全体を画面に表示します。スクリーンショットにご注意ください——これを知っている人は、あなたの記録を削除させることができます。",
+        "ko": "ID 전체를 화면에 표시합니다. 스크린샷에 주의하세요. 이를 아는 사람은 당신의 기록을 지우게 할 수 있습니다.",
+        "de": "Zeigt die vollständige ID an. Vorsicht bei Screenshots: Wer sie hat, "
+    "kann deine Aufzeichnungen löschen lassen."},
+    "erased, so send it only to us.": {
+        "zh_tw": "識別碼已複製到剪貼簿。拿到它的人就能要求刪掉你的紀錄，請只提供給我們。",
+        "zh_cn": "识别码已复制到剪贴板。拿到它的人就能要求删掉你的记录，请只提供给我们。",
+        "ja": "IDをクリップボードにコピーしました。これを知っている人はあなたの記録を削除させられるため、私たち以外には渡さないでください。",
+        "ko": "ID를 클립보드에 복사했습니다. 이를 아는 사람은 당신의 기록을 지우게 할 수 있으니 저희에게만 보내세요.",
+        "de": "Deine ID liegt in der Zwischenablage. Wer sie hat, kann deine "
+    "Aufzeichnungen löschen lassen — gib sie nur an uns weiter."},
+    # The id sits under the same bar the story endings use — see ui.Spoiler. Two strings,
+    # not one sentence with a hole in it: the instruction and the value are separate things,
+    # and a sentence glued around a widget cannot be reordered by a translator.
+    "Quote your id to have your data erased.": {
+        "zh_tw": "要刪除資料時，提供這組識別碼即可。",
+        "zh_cn": "要删除数据时，提供这组识别码即可。",
+        "ja": "データの削除を依頼するときは、このIDを伝えてください。",
+        "ko": "데이터 삭제를 요청할 때 이 ID를 알려주세요.",
+        "de": "Nenne diese ID, wenn du deine Daten löschen lassen willst."},
+    "Covered so a screenshot cannot give it away. Click to show it.": {
+        "zh_tw": "已遮住，以免截圖把它洩漏出去。點一下即可顯示。",
+        "zh_cn": "已遮住，以免截图把它泄漏出去。点一下即可显示。",
+        "ja": "スクリーンショットから漏れないよう伏せています。クリックすると表示します。",
+        "ko": "스크린샷으로 새어 나가지 않도록 가려 두었습니다. 클릭하면 표시됩니다.",
+        "de": "Verdeckt, damit ein Screenshot sie nicht preisgibt. Zum Anzeigen anklicken."},
     "not calibrated — capture cannot start without it": {
         "zh_tw": "尚未校正 — 沒有校正就無法開始記錄",
         "zh_cn": "尚未校正 — 没有校正就无法开始记录",
