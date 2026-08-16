@@ -309,3 +309,68 @@ def droppable(entries) -> list:
         seen.add(name)
         out.append(name)
     return out
+
+
+# WHAT A VEIN CAN HAND YOU, which is a far smaller question than what a dungeon can.
+#
+# The mining panel was matched against the same 2,384 names the message band is — every
+# droppable item AND every equipment family — and a vein does not produce equipment, junk,
+# relics, consumables or event stock. Over 128 recorded swings by two players (252 lines,
+# dungeon 7015) it produced exactly seven names in these three types, and one eighth line:
+# 「朧丸」, a katana, confirmed by the player as a misread of an ore name. That is the cost of
+# an answer space that admits things the panel cannot say — the wrong name does not fail, it
+# WINS, and nothing marks it.
+#
+# The three types, and what each contributes:
+#
+#   Item::EquipmentReinforceMaterial   the five iron ores — all five have been mined
+#   Item::EquipmentSubEffectChange     ウロボロス鉱石 (mined), the two 全変造石, and the
+#                                      変造石/精錬石 families
+#   Item::SaleOnly                     透明な小石 (mined) and the four regional ore families
+#
+FROM_A_VEIN = frozenset({
+    "Item::EquipmentReinforceMaterial",
+    "Item::EquipmentSubEffectChange",
+    "Item::SaleOnly",
+})
+
+# `Item::SaleOnly` IS TWO DIFFERENT THINGS UNDER ONE NAME, and only one of them is ore. The
+# type also holds keepsakes and quest tokens — 王家の指輪, 王紋輝冠のブローチ, 雪原兎の毛皮 —
+# and two rows the developers left in the shipped table, 「使ってない　後で消す」 and
+# 「テスト虫除け（仮）」. The ore is exactly the ids below, and the id is what separates them:
+# the four families of four are consecutive (`item_icon_exchange_stone011`-`044`), everything
+# from 200100000 up is a keepsake, and 20100001+ is the older block of the same.
+#
+# BY ID RATHER THAN BY ICON OR NAME, for the reason CURRENCY_IDS is: a name rule moves with
+# the locale, and an icon is a file name that can be reused — 聖白の輝石 carries the ore icon
+# `item_icon_exchange_stone024` while sitting in the keepsake block, and it is not vein
+# output. The id is the game's own identity for the thing.
+ORE_ID_BLOCKS = (
+    (20000000, 20099999),        # 透明な小石 and the 蒼雫 family
+    (200000000, 200099999),      # 水晶 / 紅焔 / 雪光, and the three coin-like materials
+)
+
+
+def _is_ore_id(item_id) -> bool:
+    if item_id is None:
+        return False
+    return any(low <= int(item_id) <= high for low, high in ORE_ID_BLOCKS)
+
+
+def from_a_vein(entries) -> list:
+    """The names the mining panel may say, in the order given, deduplicated.
+
+    Same input as `droppable` — anything with `.name`, `.item_type`, `.item_id`. Returns 247
+    of the 2,384 the panel used to be scored against.
+    """
+    out, seen = [], set()
+    for entry in entries:
+        name = getattr(entry, "name", None)
+        kind = getattr(entry, "item_type", None)
+        if not name or name in seen or kind not in FROM_A_VEIN:
+            continue
+        if kind == "Item::SaleOnly" and not _is_ore_id(getattr(entry, "item_id", None)):
+            continue
+        seen.add(name)
+        out.append(name)
+    return out

@@ -101,8 +101,15 @@ jobs:
           type requirements-build.txt
           pip install pyinstaller -r requirements-build.txt
 
+      # --production LEAVES OUT THE DEVELOPMENT MARKER, which is what hides *Calibrate…* and
+      # *See it…* from players. It was bundled deliberately while only one resolution shipped
+      # a fit — taking calibration away then would have refused every other screen. Two sizes
+      # ship one now (1920x1080 and 1600x900), and anything larger of the same shape is read
+      # by scaling, so the case it was kept for is covered. A fit made on a player's machine
+      # is a claim nobody has checked against a recording, and one such fit was wrong for
+      # three versions without anyone being able to tell.
       - name: Build
-        run: python build_exe.py
+        run: python build_exe.py --production
 
       # The exe is useless if it cannot find its own data, and that failure does not appear
       # until a player runs it. Checked here, from a folder holding nothing but the exe.

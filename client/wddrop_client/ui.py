@@ -1105,27 +1105,40 @@ class CalibrateDialog(QtWidgets.QDialog):
 class UpdateWorker(QtCore.QThread):
     """Asks GitHub whether there is a newer client. On a thread, and silent about failure.
 
-    Emits nothing at all unless there is something to say — no signal for "you are current",
-    because there is no message for it either. Any failure is the same as being current from
-    the window's point of view: this is the least important thing the program does, and it
-    must never be the reason a player is looking at a spinner.
+    AT LAUNCH it emits nothing unless there is something to say, because there is no message
+    for "you are current" that a player who did not ask wants. Any failure is the same as
+    being current from the window's point of view: this is the least important thing the
+    program does, and it must never be the reason a player is looking at a spinner.
+
+    ASKED FOR by the Settings button, `announce` is set and all three answers are emitted.
+    Someone who pressed a button is owed one, and a press that produces nothing cannot be
+    told from a press that did nothing.
     """
 
     found = QtCore.Signal(str, str)
+    # Only the button connects these two. See `announce`.
+    current = QtCore.Signal(str)
+    unreachable = QtCore.Signal()
 
-    def __init__(self, cfg: ClientConfig, parent=None):
+    def __init__(self, cfg: ClientConfig, parent=None, *, announce: bool = False):
         super().__init__(parent)
         self.cfg = cfg
+        self.announce = announce
 
     def run(self) -> None:                     # noqa: D102
         try:
-            from .updates import check
+            from .updates import look
 
-            update = check(self.cfg)
+            state, update = look(self.cfg)
         except Exception:                              # noqa: BLE001
-            return
-        if update is not None:
+            state, update = "unreachable", None
+        if state == "newer" and update is not None:
             self.found.emit(update.version, update.page)
+        elif self.announce:
+            if state == "current" and update is not None:
+                self.current.emit(update.version)
+            else:
+                self.unreachable.emit()
 
 
 class UploadWorker(QtCore.QThread):
@@ -1884,9 +1897,14 @@ class MainWindow(QtWidgets.QMainWindow):
     def _grouped(self, rows):
         """(heading, rows) in the order they are shown, or one unlabelled group.
 
-        Money first because it is the smaller list and the one a player scans past, not
-        because it is the bigger number — sorting the groups by quantity would put currency
-        on top for exactly the reason it should not be mixed in.
+        ITEMS FIRST, MONEY LAST. Money was on top because it is the shorter list; what that
+        actually did was put the two rows nobody opened a chest for above the ranking the
+        page exists to show, on every view, at every scale. Currency is not a drop anyone is
+        studying — it comes out of almost everything, in amounts nothing else reaches — so it
+        belongs where a reference figure belongs, under the thing it is a reference for.
+
+        The order is fixed rather than sorted by quantity: sorting would put currency back on
+        top for exactly the reason it must not be mixed in.
 
         A single group loses its heading: a table of items under a heading that says "items"
         is a heading that tells nobody anything.
@@ -1899,7 +1917,7 @@ class MainWindow(QtWidgets.QMainWindow):
             buckets.setdefault(categories.of(row), []).append(row)
         if len(buckets) < 2:
             return [("", rows)] if rows else []
-        order = [(CURRENCY, self.t("Currency")), ("item", self.t("Items"))]
+        order = [("item", self.t("Items")), (CURRENCY, self.t("Currency"))]
         return [(label, buckets[key]) for key, label in order if buckets.get(key)]
 
     def _item_names(self):
@@ -2255,6 +2273,34 @@ class MainWindow(QtWidgets.QMainWindow):
         note.setObjectName("hint")
         note.setWordWrap(True)
         updates_box.addWidget(note)
+        # ASKABLE BY HAND, because the automatic one cannot be relied on to have been SEEN.
+        # It runs once a launch and writes to the state line, which every other message in
+        # this window also writes to — so picking a dungeon a second later replaces it, and
+        # the player has no way to get it back or to find out whether it was ever said. This
+        # button is that way, and it is also the only way to answer "am I on the newest one?"
+        # without downloading a file to compare.
+        check_line = QtWidgets.QHBoxLayout()
+        check_line.setContentsMargins(0, 0, 0, 0)
+        self.check_updates_button = QtWidgets.QPushButton(self.t("Check now"))
+        self.check_updates_button.setToolTip(self.t(
+            "Ask GitHub now whether a newer client has been released."))
+        self.check_updates_button.clicked.connect(self._check_updates_now)
+        check_line.addWidget(self.check_updates_button)
+        # BESIDE THE BUTTON, not on the state line. The answer belongs where the question was
+        # asked; on the state line it would be overwritten by the next thing that happens,
+        # which is the failure this button exists to work around.
+        self.update_answer = QtWidgets.QLabel("")
+        self.update_answer.setObjectName("hint")
+        self.update_answer.setWordWrap(True)
+        self.update_answer.setOpenExternalLinks(True)
+        self.update_answer.setTextInteractionFlags(
+            QtCore.Qt.TextBrowserInteraction | QtCore.Qt.TextSelectableByMouse)
+        check_line.addWidget(self.update_answer, 1)
+        updates_box.addLayout(check_line)
+        # The switch turns off the REQUEST, not just the message about it — that is what the
+        # disclaimer promises — so with it off there is nothing for this button to do.
+        self._updates_button_enabled(self.cfg.check_updates)
+        self.updates.toggled.connect(self._updates_button_enabled)
         holder = QtWidgets.QWidget()
         holder.setLayout(updates_box)
         form.addRow(self.t("New versions"), holder)
@@ -2681,7 +2727,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_spool()
         self._refresh_pickaxes()
         if not self._ready:
-            self._say(self.t("Calibrate before recording."), "attention")
+            # WHICH of the two is missing, because the fixes have nothing in common — and
+            # because a player's build cannot do the first one at all: calibration is offered
+            # only where it can be checked against a recording. See config.in_development.
+            if not sizes:
+                self._say(self.t("Calibrate before recording.") if in_development()
+                          else self.t("This client shipped without a calibration. Please "
+                                      "report this."), "attention")
+            else:
+                self._say(self.t("Some data files are missing — install the client again."),
+                          "attention")
         elif self.dungeon.currentData() is None:
             self._say(self.t("Ready. Pick the dungeon you are in, then start."))
 
@@ -3257,6 +3312,64 @@ class MainWindow(QtWidgets.QMainWindow):
             f'<a href="{page}">{self.t("Get it")}</a>')
         self.update_link.setVisible(True)
 
+    def _updates_button_enabled(self, on: bool) -> None:
+        """The button follows the switch, because the switch stops the REQUEST.
+
+        A button that still asked would make the setting a lie in the one direction it must
+        not be: the disclaimer says that with it off, no request is made at all.
+        """
+        self.check_updates_button.setEnabled(bool(on))
+        self.check_updates_button.setToolTip(
+            self.t("Ask GitHub now whether a newer client has been released.") if on
+            else self.t("Turn the switch above on first — with it off no request is made."))
+        if not on:
+            self.update_answer.setText("")
+
+    def _check_updates_now(self) -> None:
+        """The player asked, so all three answers are said — including "you are up to date".
+
+        On its own thread like the launch check, for the same reason: five seconds of a
+        window that does not repaint is a window that looks broken.
+        """
+        running = getattr(self, "_manual_update_worker", None)
+        if running is not None and running.isRunning():
+            return
+        self.check_updates_button.setEnabled(False)
+        self.update_answer.setText(self.t("Asking GitHub…"))
+        worker = UpdateWorker(self.cfg, self, announce=True)
+        # The state line as well as the answer here: a newer client is worth saying in the
+        # place this window says everything else, and the link on the ribbon is the one a
+        # player will still see after they leave this page.
+        worker.found.connect(self._say_update)
+        worker.found.connect(self._answer_newer)
+        worker.current.connect(self._answer_current)
+        worker.unreachable.connect(self._answer_unreachable)
+        worker.finished.connect(self._manual_update_finished)
+        self._manual_update_worker = worker
+        worker.start()
+
+    def _manual_update_finished(self) -> None:
+        self.check_updates_button.setEnabled(self.updates.isChecked())
+
+    def _answer_newer(self, version: str, page: str) -> None:
+        self.update_answer.setText(
+            self.t("Version {version} is out — this is {running}.",
+                   version=version, running=CLIENT_VERSION)
+            + f' <a href="{page}">{self.t("Get it")}</a>')
+
+    def _answer_current(self, version: str) -> None:
+        self.update_answer.setText(
+            self.t("This is the newest version ({version}).", version=version))
+
+    def _answer_unreachable(self) -> None:
+        """Named as OUR side of it. Offline, rate-limited or GitHub down all look the same
+        from here, and none of them says anything about the player's client."""
+        from .updates import RELEASES_PAGE
+
+        self.update_answer.setText(
+            self.t("Could not ask GitHub just now. Try again later.")
+            + f' <a href="{RELEASES_PAGE}">{self.t("Releases")}</a>')
+
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:      # noqa: N802 (Qt)
         if self.worker is not None and self.worker.isRunning():
             self.worker.stop("app_closed")
@@ -3267,6 +3380,13 @@ class MainWindow(QtWidgets.QMainWindow):
         atlas = getattr(self, "_atlas_worker", None)
         if atlas is not None and atlas.isRunning():
             atlas.wait(10000)
+        # The update threads too. They own a five-second HTTP timeout, and a QThread still
+        # running when its parent is destroyed takes the process with it — which is a crash
+        # on closing the window, for the least important thing this program does.
+        for name in ("_update_worker", "_manual_update_worker"):
+            worker = getattr(self, name, None)
+            if worker is not None and worker.isRunning():
+                worker.wait(6000)
         event.accept()
 
 

@@ -241,6 +241,29 @@ def test_a_resolution_with_neither_is_refused_with_both_lists(tmp_path, monkeypa
     assert "1234x567" in str(exc.value) and "Shipped" in str(exc.value)
 
 
+def test_a_players_build_is_told_what_it_can_actually_do_about_it(tmp_path, monkeypatch):
+    """The same refusal, worded for someone whose client does not offer calibration.
+
+    `wddrop calibrate` is a command in a window with no console, in a build where the button
+    is not there either — instructions that cannot be carried out, which is worse than the
+    bare fact. What a player CAN do is set the game's own resolution to one the client ships
+    a fit for, so that is what it says.
+    """
+    monkeypatch.setenv("WDDROP_HOME", str(tmp_path))
+    from types import SimpleNamespace
+
+    from wddrop_client import __main__ as cli
+    from wddrop_client import config
+
+    monkeypatch.setattr(config, "in_development", lambda: False)
+    with pytest.raises(SystemExit) as exc:
+        cli._select_profile(SimpleNamespace(data=str(tmp_path), locale="ja"), (1234, 567))
+    said = str(exc.value)
+    assert "1234x567" in said
+    assert "calibrat" not in said.lower(), said
+    assert "1920x1080" in said, "the sizes it CAN read, which are game settings"
+
+
 def test_a_shipped_fit_replaces_the_players_own_for_that_size(monkeypatch, tmp_path):
     """"Invalidate" means IGNORE, not delete: the file stays, and it is still used for any
     size the shipped set does not cover.

@@ -1537,3 +1537,139 @@ def test_leaving_settings_puts_the_id_back_under_its_bar(app, home):
     assert window.ident.textInteractionFlags() == QtCore.Qt.NoTextInteraction, \
         "still selectable under its own bar"
     window.close()
+
+
+def test_money_sits_under_the_items_rather_than_on_top_of_them(app, home):
+    """Currency is a reference figure, not a drop anyone opened a chest for.
+
+    It came first because it is the shorter list, and what that did was put the two rows
+    nobody is studying above the ranking the page exists to show — on every view, at every
+    scale. The order is fixed rather than sorted, because sorting by quantity would put it
+    back on top for the very reason it must not be mixed in: ゴールド arrives in amounts no
+    item reaches.
+    """
+    import json
+
+    from wddrop_client.config import records_path
+    from wddrop_client.ui import MainWindow
+
+    rows = [
+        {"event_id": "a", "provenance": "chest_direct",
+         "occurred_at": "2026-08-10T01:00:00+00:00", "dive": {"dungeon_id": 7015},
+         "contents": [{"item_id": 1, "item_name": "ゴールド", "quantity": 9000},
+                      {"item_id": 40001, "item_name": "X", "quantity": 2}]},
+    ]
+    records_path().parent.mkdir(parents=True, exist_ok=True)
+    records_path().write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n",
+                              encoding="utf-8")
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window._refresh_stats_page()
+    column = [window.stats_table.item(i, 0).text().strip()
+              for i in range(window.stats_table.rowCount())
+              if window.stats_table.item(i, 0) is not None]
+    items, currency = window.t("Items"), window.t("Currency")
+    assert column.index(items) < column.index(currency), column
+    # And the row itself, not merely the heading: the item is above the money, whatever the
+    # money is called in the window's language.
+    assert column.index("X") < column.index(currency), column
+    window.close()
+
+
+def test_a_single_group_is_still_unlabelled(app, home):
+    """A table of items under a heading that says "items" is a heading that tells nobody
+    anything — and the order above must not have turned that off."""
+    import json
+
+    from wddrop_client.config import records_path
+    from wddrop_client.ui import MainWindow
+
+    records_path().parent.mkdir(parents=True, exist_ok=True)
+    records_path().write_text(json.dumps(
+        {"event_id": "a", "provenance": "chest_direct",
+         "occurred_at": "2026-08-10T01:00:00+00:00", "dive": {"dungeon_id": 7015},
+         "contents": [{"item_id": 40001, "item_name": "X", "quantity": 2}]}) + "\n",
+        encoding="utf-8")
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window._refresh_stats_page()
+    # The item and the TOTAL row, and no heading between them.
+    assert window.stats_table.rowCount() == 2
+    assert window.stats_table.item(0, 0).text() == "X"
+    window.close()
+
+
+# -- asking for a new version by hand ---------------------------------------------
+
+def test_the_update_button_says_which_of_the_three_answers_came_back(app, home, monkeypatch):
+    """The launch check folds "up to date" and "GitHub did not answer" together because it
+    has nothing to say about either. A player who PRESSED a button has: a press that produces
+    nothing cannot be told from a press that did nothing."""
+    from wddrop_client import updates
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window._show_page(3)
+
+    newer = updates.Update(version="9.9.9", page="https://example.invalid/r/9.9.9")
+    monkeypatch.setattr(updates, "latest", lambda *a, **k: newer)
+    window._check_updates_now()
+    window._manual_update_worker.wait(5000)
+    for _ in range(5):
+        app.processEvents()
+    assert "9.9.9" in window.update_answer.text()
+    assert newer.page in window.update_answer.text(), "and where to get it"
+
+    monkeypatch.setattr(updates, "latest",
+                        lambda *a, **k: updates.Update(version="0.0.1", page="x"))
+    window._check_updates_now()
+    window._manual_update_worker.wait(5000)
+    for _ in range(5):
+        app.processEvents()
+    assert window.update_answer.text() == window.t(
+        "This is the newest version ({version}).", version="0.0.1")
+
+    monkeypatch.setattr(updates, "latest", lambda *a, **k: None)
+    window._check_updates_now()
+    window._manual_update_worker.wait(5000)
+    for _ in range(5):
+        app.processEvents()
+    said = window.update_answer.text()
+    assert window.t("Could not ask GitHub just now. Try again later.") in said
+    assert "releases" in said, "and a page to look at instead"
+    window.close()
+
+
+def test_the_button_is_off_when_the_switch_that_stops_the_request_is_off(app, home):
+    """The disclaimer promises that with *New versions* off, the request is not made at all.
+    A button that still asked would make that untrue in the one direction it must not be."""
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window._show_page(3)
+    window.updates.setChecked(False)
+    assert not window.check_updates_button.isEnabled()
+    window.updates.setChecked(True)
+    assert window.check_updates_button.isEnabled()
+    window.close()
+
+
+def test_a_players_build_offers_no_calibration_at_all(app, home, monkeypatch):
+    """What ships is the fits that were replayed against recordings, and only those.
+
+    A fit made on a player's machine is a claim nobody has checked, and one of them was
+    fitted against the wrong typeface for three versions with no score reporting it. The
+    label stays in every build — which sizes are ready is worth knowing — and the offer to
+    make another one goes.
+    """
+    from wddrop_client import ui as ui_module
+
+    monkeypatch.setattr(ui_module, "in_development", lambda: False)
+    window = ui_module.MainWindow(make_config(accepted=True), data=home)
+    window._show_page(3)
+    assert window.cal_button is None
+    assert not hasattr(window, "seeing_button")
+    labels = [button.text() for button in window.findChildren(QtWidgets.QPushButton)]
+    assert not [text for text in labels if "Calibrat" in text or "See it" in text], labels
+    assert window.cal_label.text(), "which sizes are ready is still said"
+    window.close()

@@ -28,7 +28,7 @@ APP_NAME = "wddrop"
 # the build that is SENDING. The release tag must say the same thing — CI refuses a tag that
 # disagrees, because a client that under-reports itself would be refused after the fix that
 # made it acceptable, and one that over-reports would be admitted before it.
-CLIENT_VERSION = "0.7.1"
+CLIENT_VERSION = "0.8.0"
 
 
 def config_dir() -> Path:
@@ -111,15 +111,17 @@ def in_development() -> bool:
 def in_checkout() -> bool:
     """Whether this is the source tree rather than something a player was given.
 
-    NOT the same question as `in_development`, and the difference is the whole point. The
-    released exe carries the DEVELOPMENT marker deliberately — only one resolution ships a
-    fit, so taking calibration away from players would refuse every other screen size — and
+    NOT the same question as `in_development`, and the difference outlived the reason for it.
+    The released exe used to carry the DEVELOPMENT marker deliberately — only one resolution
+    shipped a fit, so taking calibration away would have refused every other screen size — and
     that made every "dev only" thing visible in the build people download. A frame counter on
     the record page is one of those: it is an instrument reading, not a feature, and a player
-    reported it as such.
+    reported it as such. Since 0.8.0 the release is built with `--production` and the two
+    questions have the same answer in a player's build; they are still different questions,
+    and a DEVELOPMENT marker dropped beside an exe separates them again.
 
-    So: `in_development` gates what a PLAYER may need on their own machine (calibration).
-    This gates what only we ever read.
+    So: `in_development` gates what a PLAYER might need on their own machine (calibration,
+    and the picture of what capture sees). This gates what only we ever read.
     """
     return not getattr(sys, "frozen", False)
 

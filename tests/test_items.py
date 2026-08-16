@@ -111,3 +111,75 @@ def test_it_reads_a_stats_row_as_readily_as_a_recorded_line():
     assert names.display(line) == names.display(row) == "透明鵝卵石"
     # And with no id on either shape, the recorded name still comes back.
     assert ItemNames().display({"item": "何か"}) == "何か"
+
+
+# -- what a vein can hand you --------------------------------------------------------
+
+def _vein_pool():
+    """The fixture as ENTRIES rather than a file, so nothing here writes JSON to disk."""
+    from wddrop_client.capture.ocr import VocabEntry
+    from wddrop_client.items import from_a_vein
+
+    entries = [
+        # the two ore id blocks, one mined name from each
+        VocabEntry("透明な小石", 20000000, "Item::SaleOnly"),
+        VocabEntry("雪光輝鉱石", 200000200, "Item::SaleOnly"),
+        # SaleOnly, but keepsakes and developer rows rather than ore
+        VocabEntry("王家の指輪", 20100001, "Item::SaleOnly"),
+        VocabEntry("使ってない　後で消す", 20100019, "Item::SaleOnly"),
+        VocabEntry("テスト虫除け（仮）", 99100001, "Item::SaleOnly"),
+        VocabEntry("大盛り金貨", 200110070, "Item::SaleOnly"),
+        VocabEntry("聖白の輝石", 200110020, "Item::SaleOnly"),
+        # the other two types, kept whole
+        VocabEntry("銀鉱石", 470000040, "Item::EquipmentReinforceMaterial"),
+        VocabEntry("ウロボロス鉱石", 400009000, "Item::EquipmentSubEffectChange"),
+        # everything a vein does not produce
+        VocabEntry("北穿の幽霊城のガラクタ", 119060637, "Item::Junk"),
+        VocabEntry("ルンゴナンゴ翠貝貨", 471000020, "Item::RelicEquipmentMaterial"),
+        VocabEntry("金の針", 300000010, "Item::Expendable"),
+        VocabEntry("朧丸", None, None, 110101110),
+    ]
+    return from_a_vein(entries)
+
+
+def test_a_vein_produces_ore_and_nothing_else():
+    """The panel was scored against everything the message band is — 2,384 names, equipment
+    included — and a vein produces none of that. It cost a real record: 「朧丸」, a katana,
+    came back from a vein and the player confirmed it as a misread of an ore name. A wrong
+    name in the answer space does not fail, it WINS, and nothing marks it."""
+    pool = set(_vein_pool())
+    assert {"透明な小石", "雪光輝鉱石", "銀鉱石", "ウロボロス鉱石"} <= pool
+    assert "朧丸" not in pool, "a vein does not hand over equipment"
+    for absent in ("北穿の幽霊城のガラクタ", "ルンゴナンゴ翠貝貨", "金の針"):
+        assert absent not in pool, absent
+
+
+def test_sale_only_is_two_things_and_only_the_ore_half_is_kept():
+    """The type holds keepsakes and quest tokens beside the ore, and two rows the developers
+    left in the shipped table. The id separates them; the icon does not — 聖白の輝石 carries
+    the ore icon `item_icon_exchange_stone024` while sitting in the keepsake block."""
+    pool = set(_vein_pool())
+    for keepsake in ("王家の指輪", "大盛り金貨", "聖白の輝石"):
+        assert keepsake not in pool, keepsake
+    for dev_row in ("使ってない　後で消す", "テスト虫除け（仮）"):
+        assert dev_row not in pool, dev_row
+
+
+def test_the_pool_is_a_small_fraction_of_what_the_band_reads():
+    """Measured on the shipped vocabulary rather than on the fixture above, because the
+    number is the point: 247 candidates against 2,154, and every index the panel builds is
+    a rendering of all of them."""
+    from wddrop_client.capture.ocr import Vocabulary
+    from wddrop_client.items import droppable, from_a_vein
+
+    vocab = Path(__file__).resolve().parents[1] / "data" / "vocab.ja.json"
+    if not vocab.exists():
+        pytest.skip("the built vocabulary is not here")
+    entries = Vocabulary.load(vocab).entries
+    pool, band = from_a_vein(entries), droppable(entries)
+    assert len(pool) == 247, len(pool)
+    assert len(pool) < len(band) / 8
+    # Every name ever read from a vein by either player, over 128 recorded swings.
+    for mined in ("透明な小石", "下級鉄鉱石", "中級鉄鉱石", "上級鉄鉱石", "特上級鉄鉱石",
+                  "銀鉱石", "ウロボロス鉱石"):
+        assert mined in pool, mined

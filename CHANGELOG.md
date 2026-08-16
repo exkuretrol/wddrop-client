@@ -21,6 +21,38 @@ the editing is what players read.
 
 Nothing yet.
 
+## [0.8.0] - 2026-08-16
+
+### Added
+
+- **Settings → New versions → Check now.** The client already asks once when the window
+  opens, but it says so on the same line everything else in the window says things — so the
+  notice can be gone before you read it, and there was no way to ask again. This asks on
+  demand and tells you which of the three answers came back, including *this is the newest
+  version*. It is off while the switch above it is off, because that switch stops the request
+  itself and not merely the message. The terms name the button, so the client asks you to
+  accept them again.
+
+### Changed
+
+- **A vein is read against what a vein can produce — 247 names instead of 2,384.** The mining
+  panel was matched against the same list the chest message is, equipment included, and a
+  name that cannot appear does not lose quietly: it wins. One swing came back as 「朧丸」, a
+  katana, which the player confirmed had never been there. Ore, reinforcement material and
+  modification stones are what a vein hands over; everything else has been taken out of the
+  panel's reach. Nothing a vein has ever produced is affected — all seven names recorded
+  across 128 swings are still in the list.
+- **The statistics table lists items first and money underneath.** Currency was on top
+  because it is the shorter list; what that did was put the two rows nobody opened a chest
+  for above the ranking the page exists for.
+- **Calibration is no longer offered.** The client ships fits for the sizes the game itself
+  offers — 1920 × 1080, 1600 × 900, and the 704 × 1241 tall window — and reads a larger
+  screen of the same shape by scaling the picture back down, so there is nothing left for a
+  player to fit. A fit made on your own machine is one nobody has checked against a
+  recording, and one such fit was wrong for three versions without anything saying so. A
+  window size the client cannot read now names the sizes it can, instead of telling you to
+  run a command that is not in your build.
+
 ## [0.7.1] - 2026-08-16
 
 ### Changed
@@ -188,6 +220,8 @@ Nothing yet.
 
 Versions before 0.5.2 were built and tested but never published, so they are not listed here.
 
+[0.8.0]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.8.0
+[0.7.1]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.7.1
 [0.7.0]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.7.0
 [0.6.0]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.6.0
 [0.5.3]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.5.3

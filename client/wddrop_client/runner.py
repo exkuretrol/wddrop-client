@@ -688,7 +688,8 @@ class CaptureRunner:
         # the shapes then disagree.
         self._mining_renderer = self._mining_renderers[self._index_key(size, spacing, window)]
         # Cut the pixels AFTER the size is settled but BEFORE anything slow: building an index
-        # for a size not seen before takes seconds over ~3,400 candidates, and the panel can
+        # for a size not seen before took seconds over ~3,400 candidates — the panel's own pool
+        # is 247 now (`items.from_a_vein`), but it is still work, and the panel can
         # be dismissed while it runs.
         # Paired with their rows: the pickaxe pass reports by row index, and a row that
         # cannot be cut must not shift the rest along.
@@ -792,7 +793,8 @@ class CaptureRunner:
         LOCKED once something reads above the gate. The lock is what stops the drift that
         had this building nine indexes in a session that should need three: junk frames pass
         the size gate with whatever height they happen to have, and each new size costs a
-        build over ~3,400 candidates.
+        build over the panel's own pool: 247 names now (`items.from_a_vein`), against the
+        ~3,400 this was measured on.
         """
         from .capture.glyph import anchor_window
 
@@ -967,8 +969,9 @@ class CaptureRunner:
         -----------------------------------------
         The sweep renders ONE candidate — the name the panel is already reading — per step,
         and correlates it against the same crop. That is a few milliseconds each, against
-        ~4s and 74MB for an index over 3,400 candidates. Only the winner is built, and only
-        if it is a different spacing from the one in hand.
+        ~4s and 74MB for an index over 3,400 candidates — less now that the panel is scored
+        against 247 (`items.from_a_vein`), and still worth not paying twenty times over. Only
+        the winner is built, and only if it is a different spacing from the one in hand.
 
         Runs at most ONCE per session that it can be settled: it is a property of the
         client's rendering, not of the panel in front of it, and repeating it per swing would
@@ -1118,10 +1121,13 @@ class CaptureRunner:
     def warm_mining_index(self, dungeon_id: int | None) -> bool:
         """Build the panel's index BEFORE capture starts, not on the first panel.
 
-        Lazy was wrong in a way that cost data. The build takes ~2.9s over 2,655 candidates
+        Lazy was wrong in a way that cost data. The build took ~2.9s over 2,655 candidates
         and a mining panel is on screen for one to two seconds, so the FIRST swing of every
         fresh process was read while the index did not exist yet — the panel was gone by the
-        time it did. Reported as "the first mine after starting is always missing", and
+        time it did. The panel's answer space is 247 names now rather than the band's 2,384
+        (`items.from_a_vein`), so that build is a fraction of what it was — but it is not
+        free, and a size the sweep has not met is still built with the panel on screen.
+        Reported as "the first mine after starting is always missing", and
         invisible on a recording, where the loop is synchronous and simply waits.
 
         Only in a dungeon that HAS veins, so a chest-only session still pays nothing. Only

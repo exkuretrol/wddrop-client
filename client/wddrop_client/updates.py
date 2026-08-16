@@ -121,17 +121,31 @@ def latest(url: str = LATEST_URL, timeout: float = TIMEOUT_SECONDS) -> Update | 
     )
 
 
-def check(cfg, *, running: str = CLIENT_VERSION) -> Update | None:
-    """The one call the window makes: is there something newer, and may we ask?
+def look(cfg, *, running: str = CLIENT_VERSION) -> tuple[str, Update | None]:
+    """Ask, and say WHICH of the three answers came back.
+
+    `"newer"`, `"current"`, `"unreachable"`. The launch check folds the last two together
+    because it has nothing to say about either — but a player who PRESSED a button has, and
+    "you are up to date" and "GitHub did not answer" are not the same news. A button that
+    stays silent on failure is indistinguishable from a button that does nothing.
 
     The setting is consulted HERE rather than at the call site, so that turning it off turns
     off the request itself and not merely the message about it. A switch that still makes
     the call is not the switch the player was offered.
     """
     if not getattr(cfg, "check_updates", True):
-        return None
+        return "unreachable", None
     found = latest()
-    if found is None or not is_newer(found.version, running):
-        return None
+    if found is None:
+        return "unreachable", None
+    if not is_newer(found.version, running):
+        log.info("wddrop: %s is the newest release and this is %s", found.version, running)
+        return "current", found
     log.info("wddrop: %s is available (this is %s)", found.version, running)
-    return found
+    return "newer", found
+
+
+def check(cfg, *, running: str = CLIENT_VERSION) -> Update | None:
+    """Is there something newer, and may we ask? None for both kinds of no."""
+    state, found = look(cfg, running=running)
+    return found if state == "newer" else None

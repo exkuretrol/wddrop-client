@@ -30,7 +30,7 @@ log = logging.getLogger("wddrop.cli")
 from wddrop_schema.models import CaptureMode
 
 from .config import ClientConfig, config_dir, data_dir
-from .items import droppable
+from .items import droppable, from_a_vein
 from .consent import ConsentRequired, disclaimer_hash, disclaimer_text
 from .uploader import upload_spool
 
@@ -625,12 +625,27 @@ def _select_profile(args, size=None):
                          ProfileStore.key_for(size), ProfileStore.key_for(source_size), scale)
                 _warn_if_the_game_renders_smaller(source_size)
                 return picked
+        # WHAT TO DO ABOUT IT DEPENDS ON WHO IS READING. In a build that offers calibration
+        # the answer is to calibrate; in a player's build it is not offered at all, and
+        # telling them to run a command that is not there — in a window with no console —
+        # is a dead end dressed as instructions. The sizes the client ships a fit for are
+        # settings inside the game, so that is the fix a player can actually carry out.
+        from .config import in_development
+
+        known = ", ".join(shipped.keys()) or "none"
+        if in_development():
+            raise SystemExit(
+                f"[!] no calibration for {ProfileStore.key_for(size)}.\n"
+                f"    Calibrated here: {', '.join(store.keys()) or 'none'}\n"
+                f"    Shipped: {known}\n"
+                f"    Run `wddrop calibrate` while the game is at this resolution; existing "
+                f"calibrations are kept."
+            )
         raise SystemExit(
-            f"[!] no calibration for {ProfileStore.key_for(size)}.\n"
-            f"    Calibrated here: {', '.join(store.keys()) or 'none'}\n"
-            f"    Shipped: {', '.join(shipped.keys()) or 'none'}\n"
-            f"    Run `wddrop calibrate` while the game is at this resolution; existing "
-            f"calibrations are kept."
+            f"[!] this client cannot read a {ProfileStore.key_for(size)} window.\n"
+            f"    Set the game's own resolution to one of: {known}\n"
+            f"    (in the game's settings, not Windows'). A larger screen of the same shape "
+            f"is fine — the picture is read at the size it was drawn."
         )
     if not len(store):
         if len(shipped) == 1:
@@ -752,6 +767,15 @@ def _build_runner(cfg: ClientConfig, args, size=None):
     if get_item:
         mining_fmt = MessageFormat(get_item, (raw["templates"] or {}).get("name_and_quantity"))
         mining_prefix = _prefix_from(mining_fmt)
+    # ITS OWN, SMALLER ANSWER SPACE — see items.from_a_vein. The panel used to be scored
+    # against everything the band is, which is how a katana came back from a vein. Falls back
+    # to the full list rather than to nothing: a vocabulary whose types this does not
+    # recognise would otherwise leave mining unreadable, and reading it imperfectly is worth
+    # more than not reading it.
+    vein_names = from_a_vein(vocab.entries)
+    if not vein_names:
+        log.warning("wddrop: no vein pool in this vocabulary; the panel keeps the full list")
+        vein_names = names
     # The pickaxe messages are whole sentences, not "<prefix><item name>", so they get their
     # own tiny index with an EMPTY prefix rather than being bolted onto the item vocabulary.
     watch = PickaxeWatch.from_vocab(args.vocab)
@@ -777,7 +801,7 @@ def _build_runner(cfg: ClientConfig, args, size=None):
         pickaxe_watch=watch,
         item_index=ItemIndex.from_vocab(raw),
         pickaxe_recognizer=pickaxe_recognizer,
-        mining_names=names if mining_fmt else None,
+        mining_names=vein_names if mining_fmt else None,
         mining_render_source=font,
         mining_format=mining_fmt,
         mining_prefix=mining_prefix or "",

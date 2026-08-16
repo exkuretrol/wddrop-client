@@ -175,6 +175,20 @@ STRINGS: dict[str, dict[str, str]] = {
         "zh_tw": "開始記錄前需要先校正。", "zh_cn": "开始记录前需要先校正。",
         "ja": "記録の前にキャリブレーションが必要です。", "ko": "기록하기 전에 보정이 필요합니다.",
         "de": "Vor der Aufnahme kalibrieren."},
+    # The same emptiness, said to someone whose build cannot fix it themselves: calibration
+    # is not offered in a released client, so this is a fault in what we shipped.
+    "This client shipped without a calibration. Please report this.": {
+        "zh_tw": "這個版本沒有附帶校正資料，請回報這個問題。",
+        "zh_cn": "这个版本没有附带校正数据，请回报这个问题。",
+        "ja": "このビルドにはキャリブレーションが同梱されていません。報告してください。",
+        "ko": "이 빌드에는 보정 데이터가 들어 있지 않습니다. 이 문제를 알려주세요.",
+        "de": "Dieser Client wurde ohne Kalibrierung ausgeliefert. Bitte melde das."},
+    "Some data files are missing — install the client again.": {
+        "zh_tw": "缺少部分資料檔，請重新安裝這個程式。",
+        "zh_cn": "缺少部分数据文件，请重新安装这个程序。",
+        "ja": "データファイルが足りません。クライアントを入れ直してください。",
+        "ko": "데이터 파일이 일부 없습니다. 클라이언트를 다시 설치하세요.",
+        "de": "Es fehlen Datendateien — installiere den Client neu."},
     "Preparing. This takes a few seconds.": {
         "zh_tw": "準備中，需要幾秒鐘。", "zh_cn": "准备中，需要几秒钟。",
         "ja": "準備中です。数秒かかります。", "ko": "준비 중입니다. 몇 초 걸립니다.",
@@ -315,6 +329,44 @@ STRINGS: dict[str, dict[str, str]] = {
               "정보는 보내지 않습니다.",
         "de": "Fragt GitHub einmal beim Öffnen des Fensters, ob es einen neueren Client "
               "gibt. Es wird nichts über dich oder dein Spiel gesendet."},
+    # Asked by hand. The automatic check speaks once, into the same line every other message
+    # in this window uses, so the notice can be gone before it is read — and there is no
+    # other way to ask "am I on the newest one?" without downloading a file to compare.
+    "Check now": {"zh_tw": "立即檢查", "zh_cn": "立即检查", "ja": "今すぐ確認",
+                  "ko": "지금 확인", "de": "Jetzt prüfen"},
+    "Ask GitHub now whether a newer client has been released.": {
+        "zh_tw": "立刻向 GitHub 查詢是否已經發布新版本。",
+        "zh_cn": "立刻向 GitHub 查询是否已经发布新版本。",
+        "ja": "新しいバージョンが公開されているか、今すぐ GitHub に問い合わせます。",
+        "ko": "새 버전이 나왔는지 지금 GitHub에 확인합니다.",
+        "de": "GitHub jetzt fragen, ob eine neuere Version veröffentlicht wurde."},
+    "Turn the switch above on first — with it off no request is made.": {
+        "zh_tw": "請先打開上面的開關；關閉時完全不會送出這個請求。",
+        "zh_cn": "请先打开上面的开关；关闭时完全不会送出这个请求。",
+        "ja": "先に上のスイッチを入れてください。オフのあいだは問い合わせ自体を行いません。",
+        "ko": "위 스위치를 먼저 켜세요. 꺼져 있으면 요청 자체를 보내지 않습니다.",
+        "de": "Schalte zuerst den Schalter oben ein — ausgeschaltet wird keine Anfrage "
+              "gesendet."},
+    "Asking GitHub…": {"zh_tw": "查詢中…", "zh_cn": "查询中…", "ja": "問い合わせ中…",
+                       "ko": "확인 중…", "de": "Frage GitHub…"},
+    # Said out loud, unlike at launch: someone who pressed a button is owed an answer, and a
+    # press that produces nothing cannot be told from a press that did nothing.
+    "This is the newest version ({version}).": {
+        "zh_tw": "這已經是最新版本（{version}）。",
+        "zh_cn": "这已经是最新版本（{version}）。",
+        "ja": "これが最新バージョンです（{version}）。",
+        "ko": "이것이 최신 버전입니다({version}).",
+        "de": "Dies ist die neueste Version ({version})."},
+    # OUR side of it. Offline, rate-limited and GitHub down look the same from here, and none
+    # of them says anything about the player's own client.
+    "Could not ask GitHub just now. Try again later.": {
+        "zh_tw": "目前無法向 GitHub 查詢，請稍後再試。",
+        "zh_cn": "目前无法向 GitHub 查询，请稍后再试。",
+        "ja": "いま GitHub に問い合わせできませんでした。あとで試してください。",
+        "ko": "지금은 GitHub에 확인할 수 없었습니다. 나중에 다시 시도하세요.",
+        "de": "GitHub war gerade nicht erreichbar. Versuch es später noch einmal."},
+    "Releases": {"zh_tw": "版本頁面", "zh_cn": "版本页面", "ja": "リリース一覧",
+                 "ko": "릴리스 목록", "de": "Releases"},
     # The log. Named for what it is FOR, not for its level: "trace" and "debug" are words
     # from inside this program, and the player reading this label is being asked to turn it
     # on so that a miss can be explained.
