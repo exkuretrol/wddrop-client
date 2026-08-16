@@ -195,6 +195,32 @@ def apply_item_highlight(view) -> None:
     view.setPalette(palette)
 
 
+# THE SCROLLBAR, AS ITS OWN RULES.
+#
+# A widget given its own stylesheet stops inheriting the application's for everything it
+# contains — including its scrollbar, which then falls back to the platform's. The guide page
+# sets a stylesheet for its padding, and so had the one scrollbar in the window that did not
+# match the others: a wide grey system bar in a column of thin dark ones. Anything setting a
+# local stylesheet has to paste these in with it.
+# Written with DOUBLED braces because it is a `.format` template, and inserted into the
+# sheet through `scrollbar()` — never as `{SCROLLBAR}`. The sheet itself is an f-string, so
+# dropping the raw template in leaves `{{` and `{PITCH}` sitting in the CSS, Qt discards
+# every rule it cannot parse, and the whole window loses its scrollbars while the one widget
+# that called `scrollbar()` keeps them. That is precisely how this was first shipped.
+SCROLLBAR = """
+    QScrollBar:vertical {{ background: {PITCH}; width: 10px; margin: 0; }}
+    QScrollBar::handle:vertical {{ background: {RULE}; min-height: 30px; }}
+    QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+    QScrollBar:horizontal {{ background: {PITCH}; height: 10px; margin: 0; }}
+    QScrollBar::handle:horizontal {{ background: {RULE}; min-width: 30px; }}
+"""
+
+
+def scrollbar() -> str:
+    """The scrollbar rules, resolved — for a widget that carries its own stylesheet."""
+    return SCROLLBAR.format(PITCH=PITCH, RULE=RULE)
+
+
 def stylesheet() -> str:
     """One sheet for the whole window.
 
@@ -366,9 +392,7 @@ def stylesheet() -> str:
         font-family: {DATA};
         font-size: 11px;
     }}
-    QScrollBar:vertical {{ background: {PITCH}; width: 10px; margin: 0; }}
-    QScrollBar::handle:vertical {{ background: {RULE}; min-height: 30px; }}
-    QScrollBar::add-line, QScrollBar::sub-line {{ height: 0; }}
+    {scrollbar()}
 
     QTextBrowser {{ background: {STONE}; border: 1px solid {RULE}; padding: 14px 16px; }}
     QToolTip {{

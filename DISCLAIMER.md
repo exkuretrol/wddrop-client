@@ -29,14 +29,17 @@
 只蒐集與掉落統計直接相關的最小資料：
 
 **會蒐集**
-- 道具名稱、數量，以及該數量是「畫面上真的有寫」還是「畫面沒寫、由程式假設為 1」
+- 道具名稱與數量
 - 取得來源（寶箱／採礦／雜物逆轉）
-- 若掉落的是裝備：裝備名稱、品質（★1–5）、等級（1–5）
+- 若掉落的是裝備：裝備名稱（**不含品質與等級**，程式不讀這兩項）
 - 單次下潛的經過時間、該次下潛已開啟的寶箱序號、下潛結束的原因
 - 迷宮／樓層識別碼
-- 事件發生時間（UTC）、時區位移，以及你電腦時鐘與伺服器的誤差
+- 事件發生時間（UTC）與時區位移
 - 匿名安裝識別碼（本機隨機產生的 UUID）、客戶端版本、遊戲語系、辨識模式
-- 辨識品質訊號（例如解析度、辨識器版本），用於判斷哪些紀錄可信
+- 辨識品質訊號，用於判斷哪些紀錄可信
+- **你自己填的劇情進度與主角等級**：你在設定裡勾選的結局，以及你通過的最高等級昇格試驗。
+  這兩項會影響遊戲本身的難度與獎勵，所以必須跟著每一筆紀錄一起送出——不然就無法分辨
+  「掉落變差」和「兩個人的遊戲狀態本來就不同」。不填也可以，程式只會送出你填過的部分
 
 **不會蒐集**
 - 帳號、密碼、登入憑證、Session 金鑰
@@ -87,7 +90,7 @@ This is an **unofficial, fan-made** statistics tool with **no affiliation to or 
 
 **Use at your own risk.** Third-party tools may violate the game's Terms of Service and could result in account suspension or a permanent ban. Reading the screen is lower risk than touching the game or its traffic, but it is **not zero risk**. The authors accept no liability for bans, data loss, or any other damages.
 
-**Collected:** item name and quantity — plus whether that quantity was printed on screen or assumed to be 1 because the game printed none — acquisition source (chest, mining, junk reversal), equipment name / quality (★1–5) / level (1–5) when the drop is equipment, dive elapsed time, chest index within the dive, how the session ended, dungeon and floor ids, UTC timestamp, timezone offset and clock skew, a random anonymous install id, client version, locale, capture mode, and recognition-quality signals.
+**Collected:** item name and quantity, acquisition source (chest, mining, junk reversal), the equipment's name when the drop is equipment — **not its quality or level, which the client does not read** — dive elapsed time, chest index within the dive, how the session ended, dungeon and floor ids, UTC timestamp and timezone offset, a random anonymous install id, client version, locale, capture mode, recognition-quality signals, and **the story progress and character grade you enter yourself** — the endings you tick in Settings, and the highest promotion exam you have passed. Those two travel with every record because the game's own difficulty and rewards move with them, and without them "the drops got worse" cannot be told apart from "these two players were not playing the same game". Leaving them unanswered is fine; only what you have answered is sent.
 
 **Never collected:** credentials, session keys, player name or code, friends, chat, character data, currency, inventory, purchase history, screenshots, your pickaxe count, or any personally identifying information.
 

@@ -387,6 +387,7 @@ class ConsentPage(QtWidgets.QWidget):
 
         text = QtWidgets.QTextBrowser()
         text.setMarkdown(self._disclaimer())
+        space_out_markdown(text.document())
         text.setOpenExternalLinks(True)
         layout.addWidget(text, 1)
 
@@ -437,6 +438,251 @@ class ConsentPage(QtWidgets.QWidget):
         self.cfg.asked_sharing = True
         self.cfg.save()
         self.accepted.emit()
+
+
+class Spoiler(QtWidgets.QLabel):
+    """A line of text under a bar until the reader asks for it.
+
+    THE QUESTION IS THE SPOILER. Asking someone which endings they have seen means printing
+    the endings, and this window puts that question in front of a player who may be three
+    chapters short of any of them — one glance at a dialog they did not open answers "does
+    the duke live" for the rest of their game. Nothing about the study needs that to happen:
+    a player who has seen an ending recognises it after one click, and a player who has not
+    only needs to know there is nothing of theirs to tick.
+
+    Painted over rather than blanked, so the row keeps its size and the list does not jump
+    when a bar lifts. The bar covers the whole label, which also hides how LONG the sentence
+    is — a short one and a long one are different guesses.
+
+    Pointer-only by design: the bars are an obstacle put in the reader's way, and the master
+    checkbox above them is the keyboard path that lifts all of them at once.
+    """
+
+    # True while the bar is up. Whoever owns the row decides what that means for the rest of
+    # it — here, a tick box that cannot be ticked until its question has been read.
+    covered_changed = QtCore.Signal(bool)
+
+    def __init__(self, text, hint, parent=None):
+        super().__init__(text, parent)
+        self.setWordWrap(True)
+        self._covered = True
+        self._hint = hint
+        self.setCursor(QtCore.Qt.PointingHandCursor)
+        self.setToolTip(hint)
+
+    def covered(self) -> bool:
+        return self._covered
+
+    def set_covered(self, covered: bool) -> None:
+        if covered == self._covered:
+            return
+        self._covered = covered
+        # The hand and the tooltip are the invitation to click. Once it is read there is
+        # nothing left to click for, and a hand cursor over ordinary text is a lie.
+        if covered:
+            self.setCursor(QtCore.Qt.PointingHandCursor)
+            self.setToolTip(self._hint)
+        else:
+            self.unsetCursor()
+            self.setToolTip("")
+        self.update()
+        self.covered_changed.emit(covered)
+
+    def mouseReleaseEvent(self, event) -> None:                  # noqa: N802 (Qt)
+        self.set_covered(False)
+        super().mouseReleaseEvent(event)
+
+    def paintEvent(self, event) -> None:                         # noqa: N802 (Qt)
+        if not self._covered:
+            super().paintEvent(event)
+            return
+        # The text is NOT drawn and then hidden — it is not drawn at all. Painting it under
+        # a fill would leave it in the widget's own pixels, one screenshot away.
+        painter = QtGui.QPainter(self)
+        painter.fillRect(self.rect(), QtGui.QColor(theme.RULE))
+
+
+class ProgressDialog(QtWidgets.QDialog):
+    """Which story endings this player has seen.
+
+    THE ONE THING THIS STUDY CANNOT READ. Most dungeons change with how far through the story
+    a player is — how strong the enemies are, which groups turn up at all, what some quests
+    pay. Two players on the same floor can be in different games, and nothing on screen says
+    so, so the only way to know is to ask.
+
+    Asked as ENDINGS rather than as a number, because a number is not a thing anyone has ever
+    been shown. Grouped by dungeon and worded as what the player SAW — the duke lived, the
+    villagers came — because that is what someone remembers a year later. Nothing here names
+    a chapter number, an internal id, or which ending the game calls "good": one of the
+    endings that counts arrives with the curse lifted and reinforcements on the way, and a
+    player asked to sort that into "bad" would answer wrongly and mean well.
+    """
+
+    def __init__(self, t, cfg, parent=None):
+        super().__init__(parent)
+        self.t, self.cfg = t, cfg
+        self.setWindowTitle(t("How far are you?"))
+        self.setMinimumWidth(460)
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(22, 20, 22, 18)
+        layout.setSpacing(12)
+
+        intro = QtWidgets.QLabel(t(
+            "Some dungeons get harder as the story goes on, and that changes what drops. "
+            "Tick anything you have seen — it is only ever used to compare like with like, "
+            "and you can change it later in Settings."))
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        from .dungeons import DUNGEONS
+        from .progress import ENDINGS, GRADE_FLOOR, decode, grade_name, released_grades
+
+        def category(text: str) -> None:
+            """A heading for one KIND of progress. Two of them, because the two things asked
+            here are not the same shape: a rung climbed, and a set of things seen."""
+            label = QtWidgets.QLabel(text)
+            label.setObjectName("wordmark")
+            layout.addSpacing(10)
+            layout.addWidget(label)
+
+        # FIRST, because it is the shorter question and the one every player can answer
+        # without thinking back: a single rung, and it caps the whole party's level.
+        category(t("Your main character's grade"))
+        grade_hint = QtWidgets.QLabel(t("The highest promotion exam you have passed. It "
+                                        "sets how far your party can level."))
+        grade_hint.setObjectName("hint")
+        grade_hint.setWordWrap(True)
+        layout.addWidget(grade_hint)
+        self.grade = Combo()
+        for entry in released_grades():
+            # The game's own word for it, in the window's language — not one of ours.
+            self.grade.addItem(grade_name(entry.id, t.locale), entry.id)
+        # NO "not sure" ENTRY. The bottom rung is the game's own starting state — every
+        # player is 無階 until they pass the first exam — so an unanswered player and a
+        # player who has passed nothing are the same person, and offering both would be
+        # asking someone to distinguish between two names for where they already are.
+        # Nothing is stored until they press Save; pressing it with this untouched is an
+        # answer, not a default.
+        at = self.grade.findData(cfg.character_grade if cfg.character_grade is not None
+                                 else GRADE_FLOOR)
+        self.grade.setCurrentIndex(max(0, at))
+        layout.addWidget(self.grade)
+
+        category(t("Main story"))
+        already = decode(cfg.progress_bits, cfg.progress_width)
+        # COVERED, because the question is itself the spoiler — see `Spoiler`. The dungeon
+        # names stay in the open: they are in the picker on the first page and name a place,
+        # not what happens there.
+        story_hint = QtWidgets.QLabel(t("Each line says how a chapter ends, so they start "
+                                        "covered. Click one to read it."))
+        story_hint.setObjectName("hint")
+        story_hint.setWordWrap(True)
+        layout.addWidget(story_hint)
+        self.reveal_all = QtWidgets.QCheckBox(t("Show the endings"))
+        self.reveal_all.setToolTip(t("Uncover all of them at once. Only do this if you have "
+                                     "finished the story, or do not mind knowing how it goes."))
+        self.reveal_all.toggled.connect(lambda shown: self._cover_story(not shown))
+        layout.addWidget(self.reveal_all)
+
+        self.boxes = {}
+        self.spoilers = {}
+        seen_chapters = []
+        for ending in ENDINGS:
+            if ending.dungeon_id not in seen_chapters:
+                seen_chapters.append(ending.dungeon_id)
+                names = DUNGEONS.get(ending.dungeon_id) or {}
+                # The dungeon's own name in the window's language — the same word the picker
+                # uses, so the question names a place the player has been rather than a
+                # chapter number the game never says out loud. Plain, not a heading: the two
+                # CATEGORIES are the headings, and a chapter is one step below.
+                title = QtWidgets.QLabel(names.get(t.locale) or names.get("ja") or "")
+                layout.addSpacing(4)
+                layout.addWidget(title)
+            # The tick and the words are two widgets now: the words are what gets covered,
+            # and the box waits on them. A box that could be ticked under its own bar is a
+            # question answered without being read, and this study would rather have no
+            # answer than an invented one.
+            box = QtWidgets.QCheckBox("")
+            box.setChecked(bool(already.get(ending.key)))
+            spoiler = Spoiler(t(ending.label),
+                              t("Covered so it cannot spoil the story. Click to read it."))
+            spoiler.covered_changed.connect(
+                lambda covered, b=box: b.setEnabled(not covered))
+            # ALREADY TICKED MEANS ALREADY SEEN. Hiding a player's own answer from them is
+            # friction with nothing behind it: they told us they watched this happen — and
+            # leaving it covered would also leave it locked, so an answer could never be
+            # taken back.
+            if already.get(ending.key):
+                spoiler.set_covered(False)
+            else:
+                box.setEnabled(False)
+            self.boxes[ending.key] = box
+            self.spoilers[ending.key] = spoiler
+            line = QtWidgets.QHBoxLayout()
+            line.setContentsMargins(0, 0, 0, 0)
+            line.setSpacing(8)
+            line.addWidget(box)
+            # NO trailing stretch: the label takes the rest of the row, so every bar is the
+            # same length. Bars cut to their own sentence would print the shape of what they
+            # cover — a two-word ending and a fifteen-word one are different guesses.
+            line.addWidget(spoiler, 1)
+            layout.addLayout(line)
+
+        layout.addSpacing(6)
+        row = QtWidgets.QHBoxLayout()
+        later = QtWidgets.QPushButton(t("Not now"))
+        later.setToolTip(t("Close this without answering. It will not ask again for a while."))
+        later.clicked.connect(self.reject)
+        row.addWidget(later)
+        row.addStretch(1)
+        save = QtWidgets.QPushButton(t("Save"))
+        save.setObjectName("primary")
+        save.setToolTip(t("Keep these answers. You can change them in Settings at any time."))
+        save.clicked.connect(self.accept)
+        row.addWidget(save)
+        self._buttons = (later, save)
+        layout.addLayout(row)
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:        # noqa: N802 (Qt)
+        """Two things that can only be done once the window is real.
+
+        THE CAPTION. The style sheet reaches inside a dialog on its own — it is set on the
+        main window and this is its child — but the title bar is drawn by Windows and is not
+        Qt's to style. Without this the question arrives as the one white-capped,
+        round-cornered window in a dark square program, which is how a dialog looks when it
+        belongs to something else.
+
+        THE BUTTON WIDTHS. One width for both, from whichever word is longer in the language
+        the window happens to be in — the theme's own note on `#primary` says what the pair
+        is meant to look like: the same size, told apart by colour. Measured HERE and not in
+        `__init__` because a button's size hint changes when the sheet is applied to it: at
+        build time the pair measured 80 and 60, after polishing 86 and 60, so equalising
+        early set both to 80 and then let only one of them grow. A fixed number instead would
+        be a number that is wrong in five of the six languages.
+        """
+        super().showEvent(event)
+        theme.apply_titlebar(self)
+        widest = max(button.sizeHint().width() for button in self._buttons)
+        for button in self._buttons:
+            button.setMinimumWidth(widest)
+
+    def _cover_story(self, covered: bool) -> None:
+        """Put the bars back up — except over a row the player has already ticked.
+
+        The same rule the dialog opens with: your own answers are not spoilers to you. It
+        matters on the way BACK, too — a ticked row that is covered is also locked, so
+        blanket re-covering would leave an answer that could not be taken back until its
+        bar was lifted a second time.
+        """
+        for key, spoiler in self.spoilers.items():
+            spoiler.set_covered(covered and not self.boxes[key].isChecked())
+
+    def answer(self) -> dict:
+        return {key: box.isChecked() for key, box in self.boxes.items()}
+
+    def grade_answer(self):
+        """The chosen grade id, or None for "not sure" — which is not grade 1."""
+        return self.grade.currentData()
 
 
 class SeeingDialog(QtWidgets.QDialog):
@@ -498,6 +744,12 @@ class SeeingDialog(QtWidgets.QDialog):
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self._grab)
         self._timer.start(500)
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:        # noqa: N802 (Qt)
+        # Same reason as every other dialog here: the caption colour, the square corners and
+        # the border are DWM attributes on a real window handle, not anything Qt draws.
+        super().showEvent(event)
+        theme.apply_titlebar(self)
         self._grab()
 
     def _grab(self) -> None:
@@ -1465,6 +1717,25 @@ class MainWindow(QtWidgets.QMainWindow):
             self.stats_source.addItem(label, value)
         self.stats_source.currentIndexChanged.connect(self._refresh_stats_page)
         pick.addWidget(self.stats_source)
+
+        # THE OTHER SCALE, and it ranks differently. How MUCH of a thing came out and how
+        # OFTEN it came out are two different questions, and for anything that drops in a
+        # stack the totals answer neither honestly: one lucky vein of 300 ore outranks a
+        # thing that turned up in every second chest, and the page would call the first the
+        # bigger finding. Both numbers are already counted per row — `quantity` and
+        # `openings` — so this chooses which one the column, the bars and the ranking use.
+        #
+        # A dropdown rather than a second column: the shares and the bars can only be OF one
+        # of them, and two sets of bars in one table is a picture that compares nothing.
+        self.stats_scale = Combo()
+        self.stats_scale.setMinimumWidth(140)
+        self._no_wheel(self.stats_scale)
+        for label, value in ((self.t("By amount"), "quantity"),
+                             (self.t("By times"), "openings")):
+            self.stats_scale.addItem(label, value)
+        self.stats_scale.currentIndexChanged.connect(self._refresh_stats_page)
+        pick.addWidget(self.stats_scale)
+
         self.stats_overall = QtWidgets.QLabel("")
         self.stats_overall.setObjectName("hint")
         pick.addWidget(self.stats_overall, 1)
@@ -1589,6 +1860,18 @@ class MainWindow(QtWidgets.QMainWindow):
                 names[floor["id"]] = floor["name"]
         return names
 
+    @staticmethod
+    def _tally(number: int, times: bool) -> str:
+        """A cell in the number column, in whichever scale the page is showing.
+
+        `×N` is the game's own way of writing an amount, and it is kept for amounts. A COUNT
+        of openings is not an amount and must not borrow that mark — `×12` under a column
+        headed "times" reads as twelve of something. The bare number does not, and the
+        header is right above it saying which of the two it is; that also keeps the column
+        free of a unit word that is a different length in each of the six languages.
+        """
+        return str(number) if times else f"×{number}"
+
     def _grouped(self, rows):
         """(heading, rows) in the order they are shown, or one unlabelled group.
 
@@ -1683,7 +1966,20 @@ class MainWindow(QtWidgets.QMainWindow):
         detail.append(self.t("days reset at 00:00 JST, as the game does"))
         self.stats_detail.setText("   ".join(detail))
 
+        # WHICH NUMBER THIS PAGE IS ABOUT — see the picker for why it is a choice. Every
+        # total, share, bar and the ranking itself follow it, because a page that ranked by
+        # one and drew bars from the other would be two answers in one picture.
+        measure = self.stats_scale.currentData() or "quantity"
+        times = measure == "openings"
+        self.stats_table.horizontalHeaderItem(1).setText(
+            self.t("times") if times else self.t("total"))
+
+        # RE-SORTED HERE, not in stats.py. `summarise` ranks by amount because that is the
+        # order everything else uses; the scale is a property of this view, and sorting a
+        # copy of the list is cheaper than a summary that has to be asked twice.
         rows = data["by_item"]
+        if times:
+            rows = sorted(rows, key=lambda r: (-r["openings"], -r["quantity"], r["item"]))
         # GROUPED, because money is not a drop. ゴールド and Gil come out of chests in
         # amounts nothing else reaches, so a single ranked list is one currency row and then
         # everything a player actually wants to see, pushed under it. See items.CURRENCY_IDS
@@ -1703,7 +1999,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 label = QtWidgets.QTableWidgetItem(heading)
                 label.setForeground(QtGui.QColor(theme.VELLUM))
                 subtotal = QtWidgets.QTableWidgetItem(
-                    f"×{sum(r['quantity'] for r in group)}")
+                    self._tally(sum(r[measure] for r in group), times))
                 subtotal.setForeground(QtGui.QColor(theme.VELLUM))
                 subtotal.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
                 self.stats_table.setItem(index, 0, label)
@@ -1712,19 +2008,25 @@ class MainWindow(QtWidgets.QMainWindow):
             # SHARES WITHIN THE GROUP, and bars against the group's own top row. A share of
             # everything would say the same thing the heading already does, and a bar scaled
             # to a currency total leaves every item as a stripe too short to compare.
-            within = sum(r["quantity"] for r in group) or 1
-            tallest = max((r["quantity"] for r in group), default=0) or 1
+            within = sum(r[measure] for r in group) or 1
+            tallest = max((r[measure] for r in group), default=0) or 1
             for row in group:
                 shown = self._item_names().display(row)
-                cells = (("   " if headings else "") + shown, f"×{row['quantity']}",
-                         f"{row['quantity'] / within * 100:.1f}%", "")
+                cells = (("   " if headings else "") + shown,
+                         self._tally(row[measure], times),
+                         f"{row[measure] / within * 100:.1f}%", "")
                 for column, value in enumerate(cells):
                     cell = QtWidgets.QTableWidgetItem(value)
                     if column:
                         cell.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
                     if column == 3:
-                        cell.setData(QtCore.Qt.UserRole, row["quantity"] / tallest)
-                        cell.setToolTip(self.t("{n} openings gave this", n=row["openings"]))
+                        cell.setData(QtCore.Qt.UserRole, row[measure] / tallest)
+                        # The OTHER number, where the column is not showing it. A row that is
+                        # tall because of one lucky stack and a row that is tall because it
+                        # turns up constantly look identical until both are in reach.
+                        cell.setToolTip(
+                            self.t("×{n} in total", n=row["quantity"]) if times
+                            else self.t("{n} openings gave this", n=row["openings"]))
                     if column == 0 and shown != row["item"]:
                         # What was actually on screen, kept within reach: the localised name
                         # is a convenience, and the reading is the evidence.
@@ -1735,7 +2037,19 @@ class MainWindow(QtWidgets.QMainWindow):
             total = QtWidgets.QTableWidgetItem(
                 self.t("total of {n} kinds", n=len(rows)))
             total.setForeground(QtGui.QColor(theme.VELLUM))
-            amount = QtWidgets.QTableWidgetItem(f"×{data['total_quantity']}")
+            summed = (sum(r["openings"] for r in rows) if times
+                      else data["total_quantity"])
+            amount = QtWidgets.QTableWidgetItem(self._tally(summed, times))
+            if times:
+                # SAID, because the number invites the wrong reading. This is the column
+                # added up — the shares above are shares of it — but one opening yields
+                # several kinds, so it counts that opening once per kind and lands well above
+                # the number of openings in the headline. Two numbers that look like they
+                # should agree and do not is worse than one number.
+                amount.setToolTip(self.t(
+                    "The column added up. One opening usually gives several kinds, so it "
+                    "counts once under each of them — this is larger than the number of "
+                    "openings above."))
             amount.setForeground(QtGui.QColor(theme.VELLUM))
             amount.setTextAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
             self.stats_table.setItem(index, 0, total)
@@ -1773,7 +2087,19 @@ class MainWindow(QtWidgets.QMainWindow):
             if isinstance(widget, (QtWidgets.QComboBox, QtWidgets.QAbstractSpinBox,
                                    QtWidgets.QLineEdit)):
                 widget.setMaximumWidth(SETTING_WIDTH)
-            box.addWidget(widget)
+            if isinstance(widget, QtWidgets.QPushButton):
+                # A BUTTON IS AS WIDE AS ITS LABEL. Stretched across the row it reads as a
+                # banner rather than something to press, and two buttons on the same page end
+                # up different widths for no reason a player could name. Same rule as the
+                # controls above, and applied here so the next button added does not have to
+                # remember it — the first two did not, and only one of them worked around it.
+                line = QtWidgets.QHBoxLayout()
+                line.setContentsMargins(0, 0, 0, 0)
+                line.addWidget(widget)
+                line.addStretch(1)
+                box.addLayout(line)
+            else:
+                box.addWidget(widget)
             if hint:
                 note = QtWidgets.QLabel(hint)
                 note.setObjectName("hint")
@@ -1940,10 +2266,45 @@ class MainWindow(QtWidgets.QMainWindow):
         form.addRow(self.t("Detailed log"), holder)
         self._show_log_path()
 
+        # THE STORY QUESTION, where a player goes looking for what this program knows about
+        # them. The prompt is a one-off; this is the copy that is always reachable.
+        self.progress_button = QtWidgets.QPushButton(self.t("My story progress…"))
+        self.progress_button.setToolTip(self.t(
+            "Say which story endings you have seen. It changes what drops, and nothing on "
+            "screen shows it."))
+        self.progress_button.clicked.connect(self._edit_progress)
+        row(self.t("Story progress"), self.progress_button,
+            self.t("Some dungeons get harder as the story goes on. Recording how far you "
+                   "are is what lets your records be compared with other players' fairly."))
+
+        # ITS OWN ROW, with its own title. It shared the answer's row, under the heading
+        # "Story progress" — so a control that decides how often a POP-UP appears sat with
+        # no name of its own beside the button that edits the answer, and read as a second
+        # thing that changed the answer. Every other control on this page is one titled row.
+        # Combo, not QComboBox: the plain one leaves its dropdown to the compositor, which
+        # rounds it — the only soft corners in a window of hard rules.
+        self.progress_interval = Combo()
+        for label, days in ((self.t("Every 2 weeks"), 14), (self.t("Monthly"), 30),
+                            (self.t("Never ask"), 0)):
+            self.progress_interval.addItem(label, days)
+        at = self.progress_interval.findData(int(self.cfg.progress_interval_days or 0))
+        self.progress_interval.setCurrentIndex(max(0, at))
+        self.progress_interval.currentIndexChanged.connect(self._progress_interval_changed)
+        row(self.t("How often to ask about story progress"), self.progress_interval,
+            self.t("How long to leave it before the question comes back on its own. It "
+                   "stops asking once you have answered everything it knows about, and "
+                   "you can always open it yourself above."))
+
         # WHO MADE THIS, at the foot of the page rather than beside the game's name in the
         # ribbon. It was in the header, where it sat next to a title nobody could mistake for
         # anything else and repeated itself on every screen; here it is stated once, where a
         # player looking for what this program is goes anyway.
+        self.disclaimer_button = QtWidgets.QPushButton(self.t("Read the disclaimer"))
+        self.disclaimer_button.setToolTip(self.t(
+            "The terms you agreed to, in full. Reading it again changes nothing."))
+        self.disclaimer_button.clicked.connect(self._show_disclaimer)
+        row(self.t("Disclaimer"), self.disclaimer_button)
+
         about = QtWidgets.QLabel(self.t(
             "A fan-made tool. It is not made by, endorsed by, or connected to the makers of "
             "the game."))
@@ -1951,7 +2312,7 @@ class MainWindow(QtWidgets.QMainWindow):
         about.setWordWrap(True)
         form.addRow(self.t("About"), about)
 
-        self._no_wheel(self.send_mode, self.ui_locale, self.fps)
+        self._no_wheel(self.send_mode, self.ui_locale, self.fps, self.progress_interval)
 
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
@@ -1978,13 +2339,90 @@ class MainWindow(QtWidgets.QMainWindow):
         return page
 
     # -- guide page ----------------------------------------------------------------
+    def _dress(self, dialog) -> None:
+        """Give a dialog the window's own sheet and icon.
+
+        A child dialog INHERITS the parent's style sheet, and that is enough right up until
+        it is not: the sheet is set on the window rather than on the application, so anything
+        that reaches the dialog by another route — a platform that treats a dialog as its own
+        top-level, a window built with styling disabled — gets Qt's defaults instead, and the
+        result is one plain grey window among dark ones. Copying it is a line, and it removes
+        the question.
+        """
+        sheet = self.styleSheet()
+        if sheet:
+            dialog.setStyleSheet(sheet)
+        icon = self.windowIcon()
+        if not icon.isNull():
+            dialog.setWindowIcon(icon)
+
+    def _show_disclaimer(self) -> None:
+        """The terms, readable again without re-asking anything.
+
+        DELIBERATELY NOT the consent page. That page exists to take an answer, and sending a
+        player back to it to re-read something would put their existing agreement back in
+        play — including the sharing choice, which is answered on it. This only shows the
+        text.
+        """
+        dialog = QtWidgets.QDialog(self)
+        self._dress(dialog)
+        dialog.setWindowTitle(self.t("Disclaimer"))
+        dialog.resize(720, 620)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        # NO MARGINS AROUND THE TEXT. They would inset the scrollbar as surely as padding
+        # does; the buttons below get their own instead.
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        view = QtWidgets.QTextBrowser()
+        view.setMarkdown(self._disclaimer_text())
+        space_out_markdown(view.document())
+        flush_scrollbar(view, inset=22)
+        view.setOpenExternalLinks(True)
+        layout.addWidget(view, 1)
+        close = QtWidgets.QPushButton(self.t("Close"))
+        close.setToolTip(self.t("Close this window. Nothing is lost."))
+        close.clicked.connect(dialog.accept)
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.setContentsMargins(18, 12, 18, 14)
+        buttons.addStretch(1)
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+        # Shown before the frame is dressed: the attributes are set on a real window handle,
+        # and `winId()` on a dialog that has never been shown is not one.
+        dialog.show()
+        theme.apply_titlebar(dialog)
+        dialog.exec()
+
+    @staticmethod
+    def _disclaimer_text() -> str:
+        from .consent import disclaimer_text
+
+        return disclaimer_text()
+
+    def _edit_progress(self) -> None:
+        """The same dialog the prompt uses. One place to change the answer, so a player who
+        finished a chapter last night does not have to wait to be asked."""
+        from . import progress
+
+        dialog = ProgressDialog(self.t, self.cfg, self)
+        self._dress(dialog)
+        if dialog.exec():
+            progress.remember(self.cfg, dialog.answer(), grade=dialog.grade_answer())
+
+    def _progress_interval_changed(self) -> None:
+        self.cfg.progress_interval_days = int(self.progress_interval.currentData() or 0)
+        self.cfg.save()
+
     def _build_guide(self) -> QtWidgets.QWidget:
         page = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         view = QtWidgets.QTextBrowser()
         view.setOpenExternalLinks(False)
-        view.setStyleSheet("border: none; padding: 8px 24px;")
+        # Edge to edge, with the inset given back as a document margin — see
+        # flush_scrollbar. The theme's scrollbar rules travel with it: a widget carrying its
+        # own stylesheet stops inheriting the application's.
+        flush_scrollbar(view)
         view.setHtml(guide_html(self.t, self.data))
         layout.addWidget(view)
         return page
@@ -2211,6 +2649,54 @@ class MainWindow(QtWidgets.QMainWindow):
         elif self.dungeon.currentData() is None:
             self._say(self.t("Ready. Pick the dungeon you are in, then start."))
 
+    def _scales(self, dungeon_id) -> bool | None:
+        """Whether this dungeon changes with the player's story progress.
+
+        None when the catalogue does not say — an older file, or a dungeon whose placements
+        were never measured. See progress.should_ask: unknown means ask, because a question
+        nobody needed costs one dismissal and a question never asked costs the covariate.
+        """
+        for entry in self._catalog or ():
+            if entry.get("id") == dungeon_id:
+                return entry.get("scales")
+        return None
+
+    def _maybe_ask_progress(self, dungeon_id) -> None:
+        """Put the story question, if this is the moment for it.
+
+        HERE rather than at first run: the first thing a player does is get the window
+        working, and a questionnaire before their first recorded chest is where people give
+        up. Picking a dungeon that scales is the first moment the answer means anything.
+        """
+        from . import progress
+
+        if dungeon_id is None or not progress.should_ask(self.cfg, self._scales(dungeon_id)):
+            return
+        if getattr(self, "_progress_dialog", None) is not None:
+            return                                  # already up; do not stack prompts
+        # OPENED, NOT EXEC'D. This runs inside the picker's own signal handler, and `exec`
+        # starts a nested event loop there — the window stops responding to everything else
+        # until the dialog is answered, and anything driving the window without a person in
+        # front of it waits forever. `open` shows it and returns; the answer arrives on
+        # `finished`.
+        dialog = ProgressDialog(self.t, self.cfg, self)
+        self._dress(dialog)
+        self._progress_dialog = dialog
+        dialog.finished.connect(lambda code, d=dialog: self._progress_answered(code, d))
+        dialog.open()
+
+    def _progress_answered(self, code, dialog) -> None:
+        from . import progress
+
+        self._progress_dialog = None
+        if code:
+            progress.remember(self.cfg, dialog.answer(), grade=dialog.grade_answer())
+        else:
+            # A dismissal costs exactly what an answer costs. Otherwise it reappears next
+            # session, and a prompt that reappears is one people learn to click away.
+            progress.mark_asked(self.cfg)
+        dialog.deleteLater()
+
     def _load_catalog(self, path) -> None:
         import json
 
@@ -2270,6 +2756,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if chosen != self.cfg.dungeon_id:
             self.cfg.dungeon_id = chosen
             self.cfg.save()
+            self._maybe_ask_progress(chosen)
         self.floor.clear()
         self.floor.addItem(self.t("not sure"), None)
         # BY ID, not by position. The picker's rows and the catalogue stopped lining up the
@@ -2752,6 +3239,74 @@ class MainWindow(QtWidgets.QMainWindow):
 # resizes a window and touches nothing in the game, and a player deciding whether to run a
 # stranger's executable deserves the author's own page rather than our summary of it.
 WINDOW_TOOL_URL = "https://forum.gamer.com.tw/C.php?bsn=70180&snA=3240"
+
+
+# HOW FAR APART MARKDOWN SITS, once Qt has rendered it.
+#
+# `setMarkdown` builds the document directly rather than through the HTML parser, so a
+# stylesheet does not reach it — `setDefaultStyleSheet` is for `setHtml` and silently does
+# nothing here. What is left is the document itself, so the spacing is applied per block
+# after the fact.
+#
+# It matters more than a nicety for this particular page: the disclaimer is the one thing a
+# player is asked to READ before they agree to it, and Qt's own defaults pack the lines
+# tightly enough that most people will scroll past instead. A wall of text that is legally
+# sufficient and practically unread is not consent worth having.
+MARKDOWN_LINE_HEIGHT = 145          # percent
+MARKDOWN_PARAGRAPH_GAP = 10         # px below every paragraph
+MARKDOWN_HEADING_GAP = 18           # px above a heading, so sections separate
+# Qt renders headings at the document's font size unless told otherwise. Roughly the usual
+# 1.5 / 1.3 / 1.15 scale, so a heading reads as one.
+MARKDOWN_HEADING_SCALE = {1: 1.5, 2: 1.3, 3: 1.15}
+
+
+def flush_scrollbar(view, inset: int = 24) -> None:
+    """Put the scrollbar against the window's edge, and the TEXT where the padding was.
+
+    A text view is normally inset by its own padding and by its page's margins, so its
+    scrollbar floats in a channel with a strip of background either side of it — the only
+    scrollbar in the window not touching an edge. Padding cannot fix that: the scrollbar is
+    inside the widget, so anything that insets the text insets the bar with it.
+
+    So the widget goes edge to edge, its padding drops to nothing, and the same distance is
+    given back as the DOCUMENT's margin, which moves the text and leaves the bar alone.
+    """
+    view.setViewportMargins(0, 0, 0, 0)
+    view.document().setDocumentMargin(inset)
+    view.setStyleSheet("QTextBrowser { border: none; padding: 0; margin: 0; }"
+                       + theme.scrollbar())
+
+
+def space_out_markdown(document, base_point_size: float | None = None) -> None:
+    """Give a Markdown document the breathing room a reader expects.
+
+    Line height, a gap under each paragraph, a larger gap above each heading, and heading
+    sizes that make sections findable. Applied to the built document because Markdown does
+    not go through the stylesheet.
+    """
+    cursor = QtGui.QTextCursor(document)
+    base = base_point_size or document.defaultFont().pointSizeF()
+    block = document.begin()
+    while block.isValid():
+        cursor.setPosition(block.position())
+        block_format = block.blockFormat()
+        # `.value`, because PySide6 hands out a python enum here and the C++ signature wants
+        # the int. Passing the enum itself raises, and it raises inside the disclaimer page —
+        # i.e. before the window can be built at all.
+        block_format.setLineHeight(MARKDOWN_LINE_HEIGHT,
+                                   QtGui.QTextBlockFormat.ProportionalHeight.value)
+        level = block_format.headingLevel()
+        block_format.setTopMargin(MARKDOWN_HEADING_GAP if level else 0)
+        block_format.setBottomMargin(MARKDOWN_PARAGRAPH_GAP)
+        cursor.setBlockFormat(block_format)
+        if level and base and base > 0:
+            scale = MARKDOWN_HEADING_SCALE.get(level, 1.0)
+            char_format = QtGui.QTextCharFormat()
+            char_format.setFontPointSize(base * scale)
+            char_format.setFontWeight(QtGui.QFont.DemiBold)
+            cursor.select(QtGui.QTextCursor.BlockUnderCursor)
+            cursor.mergeCharFormat(char_format)
+        block = block.next()
 
 
 def guide_html(t, data: Path) -> str:

@@ -21,6 +21,34 @@ the editing is what players read.
 
 Nothing yet.
 
+## [0.7.0] - 2026-08-16
+
+### Added
+
+- **The client asks how far through the story you are, and which promotion exam your main
+  character has passed.** Both change the game you are playing — how strong the enemies are,
+  which groups appear at all, what some quests pay — and neither is shown on any screen, so
+  the only way to know is to ask. It is asked once, when you pick a dungeon it can matter in,
+  and it is always editable in *Settings → 劇情進度*. Answering is optional.
+- Those two answers now travel with each record when sharing is on. Without them, "the drops
+  got worse" cannot be told apart from "these two players were not playing the same game" —
+  which is the whole question this study exists to answer. The disclaimer says so, and asks
+  you to accept the terms again.
+
+### Changed
+
+- The disclaimer reads like a document rather than a wall: headings that look like headings,
+  space between paragraphs, and it can be re-read at any time from Settings.
+
+### Fixed
+
+- Every scrollbar in the window matches again. The guide page had one of its own, and a fix
+  for that turned into every *other* page losing theirs.
+- Dialogs — the story question, the disclaimer, **See it** — wear the same dark frame and
+  square corners as the window instead of the system's rounded, pale one.
+- Buttons on the Settings page are the width of their labels rather than the width of the
+  page.
+
 ## [0.6.0] - 2026-08-15
 
 ### Added
@@ -143,6 +171,7 @@ Nothing yet.
 
 Versions before 0.5.2 were built and tested but never published, so they are not listed here.
 
+[0.7.0]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.7.0
 [0.6.0]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.6.0
 [0.5.3]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.5.3
 [0.5.2]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.5.2

@@ -797,6 +797,238 @@ STRINGS: dict[str, dict[str, str]] = {
         "de": "nicht unterstützt. In dieser Größe zeichnet das Spiel die Namen mit zu wenig "
               "Detail, um sie zuverlässig zu lesen — und eine Zeile, die dieser Client nicht "
               "lesen kann, wird ausgelassen statt geraten."},
+    "How far are you?": {
+        "zh_tw": "你玩到哪裡了？",
+        "zh_cn": "你玩到哪里了？",
+        "ja": "どこまで進んでいますか？",
+        "ko": "어디까지 진행했나요?",
+        "de": "Wie weit bist du?"},
+    "Some dungeons get harder as the story goes on, and that changes what "
+    "drops. Tick anything you have seen — it is only ever used to compare like "
+    "with like, and you can change it later in Settings.": {
+        "zh_tw": "有些迷宮會隨著劇情進度變強，掉落也會跟著改變。看過的就勾起來——這只用來把條件相同的紀錄放在一起比較，之後也能在設定裡改。",
+        "zh_cn": "有些迷宫会随着剧情进度变强，掉落也会跟着改变。看过的就勾起来——这只用来把条件相同的记录放在一起比较，之后也能在设置里改。",
+        "ja": "ダンジョンによっては物語の進行につれて強くなり、ドロップも変わります。見たものにチェックを入れてください。条件の揃った記録どうしを比べるためだけに使い、あとから設定で変更できます。",
+        "ko": "일부 던전은 이야기가 진행될수록 강해지고, 드롭도 그에 따라 달라집니다. 본 것에 체크해 주세요. 조건이 같은 기록끼리 비교하는 데에만 쓰이며, 나중에 설정에서 바꿀 수 있습니다.",
+        "de": "Manche Verliese werden im Lauf der Geschichte stärker, und damit ändert "
+    "sich auch, was fällt. Hake an, was du gesehen hast — es dient nur dazu, "
+    "Vergleichbares zu vergleichen, und du kannst es später in den "
+    "Einstellungen ändern."},
+    "Close this without answering. It will not ask again for a while.": {
+        "zh_tw": "先不回答就關掉。接下來一段時間不會再問。",
+        "zh_cn": "先不回答就关掉。接下来一段时间不会再问。",
+        "ja": "答えずに閉じます。しばらくは再度たずねません。",
+        "ko": "답하지 않고 닫습니다. 당분간 다시 묻지 않습니다.",
+        "de": "Ohne Antwort schließen. Es fragt eine Weile nicht wieder."},
+    "Save": {
+        "zh_tw": "儲存",
+        "zh_cn": "保存",
+        "ja": "保存",
+        "ko": "저장",
+        "de": "Speichern"},
+    "Keep these answers. You can change them in Settings at any time.": {
+        "zh_tw": "保留這些答案。之後隨時可以在設定裡修改。",
+        "zh_cn": "保留这些答案。之后随时可以在设置里修改。",
+        "ja": "この内容で保存します。設定からいつでも変更できます。",
+        "ko": "이 답변을 저장합니다. 설정에서 언제든지 바꿀 수 있습니다.",
+        "de": "Diese Antworten behalten. Du kannst sie jederzeit in den Einstellungen "
+    "ändern."},
+    "My story progress…": {
+        "zh_tw": "我的劇情進度…",
+        "zh_cn": "我的剧情进度…",
+        "ja": "物語の進行状況…",
+        "ko": "내 이야기 진행도…",
+        "de": "Mein Fortschritt…"},
+    "Say which story endings you have seen. It changes what drops, and nothing "
+    "on screen shows it.": {
+        "zh_tw": "告訴我們你看過哪些結局。它會影響掉落，而畫面上看不到它。",
+        "zh_cn": "告诉我们你看过哪些结局。它会影响掉落，而画面上看不到它。",
+        "ja": "見たエンディングを教えてください。ドロップに影響しますが、画面には表示されません。",
+        "ko": "본 엔딩을 알려주세요. 드롭에 영향을 주지만 화면에는 표시되지 않습니다.",
+        "de": "Sag, welche Enden du gesehen hast. Es beeinflusst die Beute und steht "
+    "nirgends auf dem Bildschirm."},
+    "Story progress": {
+        "zh_tw": "劇情進度",
+        "zh_cn": "剧情进度",
+        "ja": "物語の進行状況",
+        "ko": "이야기 진행도",
+        "de": "Fortschritt"},
+    "Some dungeons get harder as the story goes on. Recording how far you are "
+    "is what lets your records be compared with other players' fairly.": {
+        "zh_tw": "有些迷宮會隨著劇情進度變強。記下你的進度，才能讓你的紀錄跟其他玩家的公平比較。",
+        "zh_cn": "有些迷宫会随着剧情进度变强。记下你的进度，才能让你的记录跟其他玩家的公平比较。",
+        "ja": "ダンジョンによっては物語の進行につれて強くなります。進行状況を記録しておくことで、ほかのプレイヤーの記録と公平に比べられます。",
+        "ko": "일부 던전은 이야기가 진행될수록 강해집니다. 진행도를 기록해 두어야 다른 플레이어의 기록과 공정하게 비교할 수 있습니다.",
+        "de": "Manche Verliese werden im Lauf der Geschichte stärker. Deinen Stand "
+    "festzuhalten ist das, was einen fairen Vergleich mit den Aufzeichnungen "
+    "anderer möglich macht."},
+    "How often to ask about story progress": {
+        "zh_tw": "確認劇情進度多久問一次",
+        "zh_cn": "确认剧情进度多久问一次",
+        "ja": "物語の進行状況をたずねる頻度",
+        "ko": "이야기 진행도를 묻는 주기",
+        "de": "Wie oft nach dem Fortschritt fragen"},
+    "How long to leave it before the question comes back on its own. It stops "
+    "asking once you have answered everything it knows about, and you can always "
+    "open it yourself above.": {
+        "zh_tw": "隔多久才會自己再問一次。你把它知道的都回答完之後就不會再問了，也可以隨時從上面自己打開。",
+        "zh_cn": "隔多久才会自己再问一次。你把它知道的都回答完之后就不会再问了，也可以随时从上面自己打开。",
+        "ja": "この質問がひとりでに戻ってくるまでの間隔です。今わかっているぶんをすべて答えたあとはたずねません。上のボタンからいつでも開けます。",
+        "ko": "질문이 저절로 다시 나타나기까지의 간격입니다. 지금 아는 항목을 모두 답하면 더 묻지 않으며, 위에서 언제든 직접 열 수 있습니다.",
+        "de": "Wie lange es dauert, bis die Frage von selbst wiederkommt. Sie hört auf "
+    "zu fragen, sobald du alles beantwortet hast, was sie kennt — und du kannst sie "
+    "oben jederzeit selbst öffnen."},
+    "Every 2 weeks": {
+        "zh_tw": "每兩週",
+        "zh_cn": "每两周",
+        "ja": "2週間ごと",
+        "ko": "2주마다",
+        "de": "Alle 2 Wochen"},
+    "Monthly": {
+        "zh_tw": "每個月",
+        "zh_cn": "每个月",
+        "ja": "1か月ごと",
+        "ko": "매달",
+        "de": "Monatlich"},
+    "Never ask": {
+        "zh_tw": "不要問",
+        "zh_cn": "不要问",
+        "ja": "たずねない",
+        "ko": "묻지 않기",
+        "de": "Nie fragen"},
+    "You were taken to the execution ground": {
+        "zh_tw": "被押上處刑台的結局",
+        "zh_cn": "被押上处刑台的结局",
+        "ja": "処刑場に連れて行かれた",
+        "ko": "처형장으로 끌려갔다",
+        "de": "Du wurdest zur Hinrichtung geführt"},
+    "The person you were sent to find was already dead": {
+        "zh_tw": "要找的人已經死了",
+        "zh_cn": "要找的人已经死了",
+        "ja": "捜していた人はすでに亡くなっていた",
+        "ko": "찾던 사람은 이미 죽어 있었다",
+        "de": "Die gesuchte Person war bereits tot"},
+    "You brought the person you were sent to find back": {
+        "zh_tw": "把要找的人平安帶了回來",
+        "zh_cn": "把要找的人平安带了回来",
+        "ja": "捜していた人を連れて帰れた",
+        "ko": "찾던 사람을 무사히 데려왔다",
+        "de": "Du hast die gesuchte Person zurückgebracht"},
+    "The duke was killed and you were blamed for it": {
+        "zh_tw": "公爵被殺，而你被當成兇手",
+        "zh_cn": "公爵被杀，而你被当成凶手",
+        "ja": "公爵が殺され、その罪を着せられた",
+        "ko": "공작이 살해되고, 그 죄를 뒤집어썼다",
+        "de": "Der Herzog wurde getötet und man gab dir die Schuld"},
+    "Your main character's grade": {
+        "zh_tw": "主角的等級", "zh_cn": "主角的等级", "ja": "主人公の等級",
+        "ko": "주인공의 등급", "de": "Rang deiner Hauptfigur"},
+    "The highest promotion exam you have passed. It sets how far your party can level.": {
+        "zh_tw": "你通過的最高等級昇格試驗。它決定隊伍能練到幾級。",
+        "zh_cn": "你通过的最高等级晋升考试。它决定队伍能练到几级。",
+        "ja": "合格した最も高い等級昇格試験です。パーティのレベル上限を決めます。",
+        "ko": "합격한 가장 높은 등급 승급 시험입니다. 파티의 레벨 상한을 정합니다.",
+        "de": "Die höchste Aufstiegsprüfung, die du bestanden hast. Sie legt fest, wie weit "
+              "deine Gruppe aufsteigen kann."},
+    "Main story": {
+        "zh_tw": "主線劇情", "zh_cn": "主线剧情", "ja": "メインストーリー",
+        "ko": "메인 스토리", "de": "Hauptgeschichte"},
+    # The bars over the endings. Every one of these has to work for someone who has not
+    # played that far — they are the words that stand where the spoiler would be.
+    "Each line says how a chapter ends, so they start covered. Click one to read it.": {
+        "zh_tw": "每一行都會講到某一章的結局，所以預設先遮起來。想看就點一下。",
+        "zh_cn": "每一行都会讲到某一章的结局，所以默认先遮起来。想看就点一下。",
+        "ja": "各行はその章の結末に触れるため、最初は伏せてあります。読むには行をクリックしてください。",
+        "ko": "각 줄은 그 장의 결말을 말하므로 처음에는 가려 둡니다. 읽으려면 클릭하세요.",
+        "de": "Jede Zeile verrät, wie ein Kapitel ausgeht, darum sind sie zunächst "
+    "verdeckt. Zum Lesen anklicken."},
+    "Show the endings": {
+        "zh_tw": "顯示結局內容", "zh_cn": "显示结局内容", "ja": "結末を表示する",
+        "ko": "엔딩 보이기", "de": "Enden anzeigen"},
+    "Uncover all of them at once. Only do this if you have finished the story, "
+    "or do not mind knowing how it goes.": {
+        "zh_tw": "一次全部掀開。只有在你已經通關，或不介意先知道結局時再用。",
+        "zh_cn": "一次全部掀开。只有在你已经通关，或不介意先知道结局时再用。",
+        "ja": "すべてまとめて表示します。物語を最後まで見たか、先に結末を知ってもかまわない場合だけ使ってください。",
+        "ko": "한 번에 모두 펼칩니다. 이야기를 끝냈거나 결말을 미리 알아도 괜찮을 때만 사용하세요.",
+        "de": "Alle auf einmal aufdecken. Nur wenn du die Geschichte durch hast — oder "
+    "es dir nichts ausmacht, sie vorher zu kennen."},
+    "Covered so it cannot spoil the story. Click to read it.": {
+        "zh_tw": "已遮住以免劇透。點一下即可閱讀。",
+        "zh_cn": "已遮住以免剧透。点一下即可阅读。",
+        "ja": "ネタバレを避けるため伏せています。クリックすると読めます。",
+        "ko": "스포일러를 피하려고 가려 두었습니다. 클릭하면 읽을 수 있습니다.",
+        "de": "Verdeckt, damit nichts verraten wird. Zum Lesen anklicken."},
+    "You finished it, but someone did not make it": {
+        "zh_tw": "通關了，但有人沒能活下來", "zh_cn": "通关了，但有人没能活下来",
+        "ja": "クリアしたが、誰かは戻らなかった",
+        "ko": "클리어했지만 누군가는 돌아오지 못했다",
+        "de": "Du hast es geschafft, aber jemand kam nicht zurück"},
+    "You finished it with everyone still alive": {
+        "zh_tw": "所有人都活著通關", "zh_cn": "所有人都活着通关",
+        "ja": "全員生きたままクリアした", "ko": "모두 살아남은 채로 클리어했다",
+        "de": "Du hast es geschafft, und alle haben überlebt"},
+    "You made peace with the uncle": {
+        "zh_tw": "與阿爾巴諾叔父和解了", "zh_cn": "与阿尔巴诺叔父和解了",
+        "ja": "アルバーノ叔父と和解した", "ko": "알바노 삼촌과 화해했다",
+        "de": "Du hast dich mit dem Onkel versöhnt"},
+    "You fought the great aberration and she made up her mind": {
+        "zh_tw": "打了奧克多納拉斯，梅爾吉娜也下定了決心",
+        "zh_cn": "打了奥克多纳拉斯，梅尔吉娜也下定了决心",
+        "ja": "オクトナラスと戦い、メルジーナも決意した",
+        "ko": "옥토나라스와 싸웠고, 메르지나도 결심했다",
+        "de": "Du hast die große Aberration bekämpft, und sie hat sich entschieden"},
+    "The couple got away alive": {
+        "zh_tw": "那對情侶活著離開了", "zh_cn": "那对情侣活着离开了",
+        "ja": "あの二人は生きて逃げのびた", "ko": "그 연인은 살아서 떠났다",
+        "de": "Das Paar kam lebend davon"},
+    "You handed over the evidence and named the culprit": {
+        "zh_tw": "交出證物，指認了幕後黑手", "zh_cn": "交出证物，指认了幕后黑手",
+        "ja": "証拠品を渡し、黒幕を告発した",
+        "ko": "증거를 넘기고 배후를 고발했다",
+        "de": "Du hast die Beweise übergeben und den Schuldigen benannt"},
+    "You freed the priest and saw the story through": {
+        "zh_tw": "解放了神父，走完了整個故事", "zh_cn": "解放了神父，走完了整个故事",
+        "ja": "神父を解放し、物語を最後まで見届けた",
+        "ko": "신부를 해방하고 이야기를 끝까지 지켜봤다",
+        "de": "Du hast den Priester befreit und die Geschichte zu Ende gebracht"},
+    "The duke survived": {
+        "zh_tw": "公爵活了下來",
+        "zh_cn": "公爵活了下来",
+        "ja": "公爵は無事だった",
+        "ko": "공작이 무사했다",
+        "de": "Der Herzog hat überlebt"},
+    "The priest changed into something you could not beat": {
+        "zh_tw": "神父變成了打不贏的模樣",
+        "zh_cn": "神父变成了打不赢的模样",
+        "ja": "神父が倒せない姿に変わった",
+        "ko": "신부가 이길 수 없는 모습으로 변했다",
+        "de": "Der Priester wurde zu etwas, das du nicht besiegen konntest"},
+    "You beat the priest, and the villagers came for you": {
+        "zh_tw": "打倒神父之後，村民找上了你",
+        "zh_cn": "打倒神父之后，村民找上了你",
+        "ja": "神父を倒したあと、村人たちが来た",
+        "ko": "신부를 쓰러뜨린 뒤 마을 사람들이 찾아왔다",
+        "de": "Du hast den Priester besiegt, und die Dorfbewohner kamen"},
+    "You beat the priest and finished the story": {
+        "zh_tw": "打倒神父並走完了故事",
+        "zh_cn": "打倒神父并走完了故事",
+        "ja": "神父を倒して物語を最後まで見た",
+        "ko": "신부를 쓰러뜨리고 이야기를 끝까지 봤다",
+        "de": "Du hast den Priester besiegt und die Geschichte beendet"},
+    "Disclaimer": {
+        "zh_tw": "免責聲明", "zh_cn": "免责声明", "ja": "免責事項", "ko": "면책 조항",
+        "de": "Haftungsausschluss"},
+    "Read the disclaimer": {
+        "zh_tw": "重看免責聲明", "zh_cn": "重看免责声明", "ja": "免責事項をもう一度読む",
+        "ko": "면책 조항 다시 읽기", "de": "Haftungsausschluss lesen"},
+    "The terms you agreed to, in full. Reading it again changes nothing.": {
+        "zh_tw": "你同意過的完整條款。重看一次不會改變任何設定。",
+        "zh_cn": "你同意过的完整条款。重看一次不会改变任何设置。",
+        "ja": "同意した内容の全文です。読み直しても設定は変わりません。",
+        "ko": "동의한 조항 전문입니다. 다시 읽어도 설정은 바뀌지 않습니다.",
+        "de": "Die Bedingungen, denen du zugestimmt hast, vollständig. Erneutes Lesen "
+              "ändert nichts."},
     "Veins: wait for the ▼.": {
         "zh_tw": "採掘點：等 ▼ 出現。", "zh_cn": "采掘点：等 ▼ 出现。",
         "ja": "採掘ポイント：▼ を待つ。", "ko": "채굴 포인트: ▼ 를 기다리세요.",
@@ -1151,6 +1383,25 @@ STRINGS: dict[str, dict[str, str]] = {
     "Veins": {"zh_tw": "採掘點", "zh_cn": "采掘点", "ja": "採掘ポイント", "ko": "채굴 포인트",
               "de": "Abbaustellen"},
     "share": {"zh_tw": "佔比", "zh_cn": "占比", "ja": "割合", "ko": "비율", "de": "Anteil"},
+    # The second scale. "times" heads the column; the two "By …" lines are what the picker
+    # offers, and they are phrased as the question being asked rather than as a field name.
+    "times": {"zh_tw": "次數", "zh_cn": "次数", "ja": "回数", "ko": "횟수",
+              "de": "Male"},
+    "By amount": {"zh_tw": "依數量", "zh_cn": "依数量", "ja": "個数で見る",
+                  "ko": "수량 기준", "de": "Nach Menge"},
+    "By times": {"zh_tw": "依次數", "zh_cn": "依次数", "ja": "回数で見る",
+                 "ko": "횟수 기준", "de": "Nach Häufigkeit"},
+    "×{n} in total": {
+        "zh_tw": "總共 ×{n}", "zh_cn": "总共 ×{n}", "ja": "合計 ×{n}",
+        "ko": "합계 ×{n}", "de": "insgesamt ×{n}"},
+    "The column added up. One opening usually gives several kinds, so it counts "
+    "once under each of them — this is larger than the number of openings above.": {
+        "zh_tw": "這欄的總和。一次開啟通常會給好幾種東西，每一種都各算一次，所以這個數字會大於上面的開啟次數。",
+        "zh_cn": "这栏的总和。一次开启通常会给好几种东西，每一种都各算一次，所以这个数字会大于上面的开启次数。",
+        "ja": "この列の合計です。1 回の開封でふつう数種類が出るため、その 1 回は種類ごとに数えられます。上の開封回数より大きくなります。",
+        "ko": "이 열의 합계입니다. 한 번 열면 보통 여러 종류가 나오므로 그 한 번이 종류마다 세어집니다. 위의 개봉 횟수보다 큽니다.",
+        "de": "Die Spalte aufsummiert. Eine Öffnung gibt meist mehrere Arten und wird "
+    "daher unter jeder einzeln gezählt — das liegt über der Zahl der Öffnungen oben."},
     "total of {n} kinds": {
         "zh_tw": "合計（{n} 種）", "zh_cn": "合计（{n} 种）", "ja": "合計（{n} 種類）",
         "ko": "합계({n}종)", "de": "Gesamt ({n} Arten)"},

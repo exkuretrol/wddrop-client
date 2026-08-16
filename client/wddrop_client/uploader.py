@@ -53,11 +53,19 @@ def hydrate(raw: dict, cfg: ClientConfig, mode: CaptureMode) -> DropEvent:
     # Falls back to the running version for a line spooled before this was written, which
     # is the only honest answer available for it.
     captured = raw.pop("client_version", None) or CLIENT_VERSION
+    from .progress import as_flags, decode
+
+    # Only what the player has actually answered. An unanswered profile sends nothing rather
+    # than a zero, because zero is a real answer — "I have finished none of it" — and one
+    # nobody gave.
+    answered = bool(getattr(cfg, "progress_width", 0))
     raw["capture"] = CaptureInfo(
         mode=mode,
         client_version=captured,
         locale=cfg.locale,
         qc=raw.pop("qc", {}) or {},
+        progress=as_flags(decode(cfg.progress_bits, cfg.progress_width)) if answered else None,
+        character_grade=getattr(cfg, "character_grade", None),
     ).model_dump()
     return DropEvent.model_validate(raw)
 

@@ -28,7 +28,7 @@ APP_NAME = "wddrop"
 # the build that is SENDING. The release tag must say the same thing — CI refuses a tag that
 # disagrees, because a client that under-reports itself would be refused after the fix that
 # made it acceptable, and one that over-reports would be admitted before it.
-CLIENT_VERSION = "0.6.0"
+CLIENT_VERSION = "0.7.0"
 
 
 def config_dir() -> Path:
@@ -373,6 +373,40 @@ class ClientConfig:
     # reproduce it on demand, and asking them to install a debug build is asking them to
     # stop helping. See logs.py for what each level holds.
     trace: bool = False
+    # HOW FAR THROUGH THE STORY THIS PLAYER IS, as they reported it.
+    #
+    # Some dungeons scale with a value the game keeps on its own side and never shows anyone:
+    # it decides how strong the enemies are, which groups appear at all, and what some quests
+    # pay out. Two players standing on the same floor can be in measurably different games —
+    # in one dungeon the same quest pays 2,500 or 8,500 gold depending on it. Whether it also
+    # changes what is IN a chest is exactly the open question this study can answer, and only
+    # if the covariate is recorded.
+    #
+    # It cannot be read: no screen shows it, no file the client can reach holds it, and the
+    # amount each story ending adds is decided on the game's side. What CAN be asked is what
+    # the player has seen, so this is a bitfield of those endings — self-reported, never a
+    # level, and stored as `1`/`0` characters oldest-first.
+    #
+    # APPEND ONLY. New endings get new bits on the end; an existing bit never changes meaning
+    # or position, because a row written last month cannot be re-asked. `progress_width` is
+    # how many bits existed when the answer was given, so a bit that did not exist yet reads
+    # as unknown rather than as "no".
+    progress_bits: str = ""
+    progress_width: int = 0
+    # When the question was last PUT — answered or dismissed alike. Dismissing has to cost
+    # the same as answering, or a prompt that reappears next session teaches people to click
+    # it away without reading, and a reflexive answer is worse than none.
+    progress_asked_at: str | None = None
+    # How long to leave it before asking again, in days. Zero means never ask; the question
+    # stays available in Settings either way. Progress moves slowly — reaching an ending is
+    # not something that happens between two sessions — so this is a ceiling on nagging
+    # rather than a schedule.
+    progress_interval_days: int = 14
+    # THE MAIN CHARACTER'S GRADE, a separate axis from the story above and stored as the
+    # game's own grade id. It caps the party's level — 40 at bronze, 70 at copper — so two
+    # players at the same story point but different grades are farming with different
+    # parties. None means nobody has said; it is NOT grade 1, which is a real rung.
+    character_grade: int | None = None
     consent: ConsentState = field(default_factory=ConsentState)
 
     @classmethod

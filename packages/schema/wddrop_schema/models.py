@@ -112,7 +112,9 @@ from pydantic import AliasChoices, BaseModel, Field, field_validator, model_vali
 # 2 = the ja-only trim: raw_text, item_type, equipment_name/_id, quality, level,
 # source_junk_name/_id and game_version left the wire because nothing filled them. Bumped
 # rather than changed quietly, so a batch that predates the trim is identifiable as one.
-SCHEMA_VERSION = 2
+# 3 adds the two self-reported covariates on CaptureInfo. ADDITIVE and optional, so a client
+# that never sends them stays valid and the ingest floor does not move for it.
+SCHEMA_VERSION = 3
 
 
 class CaptureMode(str, enum.Enum):
@@ -288,6 +290,23 @@ class CaptureInfo(BaseModel):
     locale: str = Field(default="ja", description="Game language the names were read in.")
     # Free-form QC signals (screen resolution, detector version, template set hash...).
     qc: dict[str, str | int | float | bool] = Field(default_factory=dict)
+    # WHAT THE PLAYER'S OWN GAME LOOKED LIKE WHEN THIS WAS READ. Both are self-reported and
+    # neither is a measurement — see `progress_conditions.json` for what each bit means.
+    #
+    # ON THE EVENT, NOT ON THE PLAYER. A player-level record would hold only their latest
+    # answer, and every row collected before they finished a chapter would be silently
+    # re-attributed to progress they did not have at the time. The covariate has to be
+    # observed WITH the reading, exactly like `client_version` beside it.
+    #
+    # `progress` is a flags integer: bit N is the Nth condition, OR to combine — the same
+    # encoding a permissions field uses. Unlike one of those, an unset bit is not a "no": a
+    # condition that did not exist when the player answered means nobody asked them, and
+    # `client_version` together with the reference table is what tells the two apart.
+    #
+    # `character_grade` is the game's own grade id, a ladder rather than a set, so it is a
+    # number rather than more bits. None means unanswered; grade 1 is a real rung.
+    progress: int | None = Field(default=None, ge=0)
+    character_grade: int | None = Field(default=None, ge=1)
 
 
 class DropEvent(BaseModel):

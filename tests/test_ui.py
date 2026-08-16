@@ -1195,3 +1195,272 @@ def test_the_window_says_somewhere_that_it_is_not_the_game_makers(app, home):
     settings = window.pages.widget(3)
     said = " ".join(label.text() for label in settings.findChildren(QtWidgets.QLabel))
     assert "not made by" in said and "connected to the makers" in said
+
+
+def test_the_disclaimer_is_spaced_out_enough_to_read(app):
+    """It is the one page a player is ASKED to read before agreeing to it, and Qt's Markdown
+    defaults pack the lines tight enough that most people scroll past. A wall of text that is
+    legally sufficient and practically unread is not consent worth having.
+
+    Checked on the document rather than on pixels: a stylesheet cannot reach a Markdown
+    document at all (`setDefaultStyleSheet` is for `setHtml`, and silently does nothing
+    here), so this asserts the property that the fix has to produce.
+    """
+    from PySide6 import QtGui
+
+    from wddrop_client.ui import space_out_markdown
+
+    document = QtGui.QTextDocument()
+    document.setMarkdown("# Heading\n\nA paragraph.\n\n## Smaller\n\nAnother paragraph.\n")
+    space_out_markdown(document, base_point_size=10.0)
+
+    blocks, headings = [], []
+    block = document.begin()
+    while block.isValid():
+        fmt = block.blockFormat()
+        blocks.append(fmt)
+        if fmt.headingLevel():
+            headings.append(block)
+        block = block.next()
+
+    assert blocks, "the document came out empty"
+    assert all(f.lineHeight() > 100 for f in blocks), "the lines are still packed together"
+    assert all(f.bottomMargin() > 0 for f in blocks), "paragraphs still run together"
+    assert headings, "the headings were lost"
+    for block in headings:
+        assert block.blockFormat().topMargin() > 0, "sections do not separate"
+        sizes = []
+        iterator = block.begin()
+        while not iterator.atEnd():
+            fragment = iterator.fragment()
+            if fragment.isValid():
+                sizes.append(fragment.charFormat().fontPointSize())
+            iterator += 1
+        assert sizes and max(sizes) > 10.0, "a heading is the same size as the body text"
+
+
+def test_a_widget_with_its_own_stylesheet_keeps_the_theme_scrollbar(app, home):
+    """Qt stops a widget inheriting the application's stylesheet the moment it is given one
+    of its own — scrollbar included. The guide page sets a stylesheet for its padding, and so
+    had the only platform-styled scrollbar in the window: wide and grey among thin dark ones.
+
+    Asserted on the sheet rather than by looking, because the difference is invisible to
+    everything except a person with the window open.
+    """
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    guide = window.pages.widget(2)
+    views = guide.findChildren(QtWidgets.QTextBrowser)
+    assert views, "the guide has no text view"
+    for view in views:
+        sheet = view.styleSheet()
+        if not sheet:
+            continue                      # inheriting the app's is fine; having none is not
+        assert "QScrollBar" in sheet, "this view drops the theme's scrollbar"
+    window.close()
+
+
+def test_the_disclaimer_can_be_read_again_without_reopening_the_question(app, home):
+    """It is the longest thing a player agrees to and the easiest to want to check later.
+    Showing it must NOT send them back to the consent page: that page exists to take an
+    answer, and going there would put an existing agreement — and the sharing choice made on
+    it — back in play.
+    """
+    import inspect
+
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    settings = window.pages.widget(3)
+    labels = [b.text() for b in settings.findChildren(QtWidgets.QPushButton)]
+    assert any("免責" in text or "isclaimer" in text or "免責事項" in text for text in labels), \
+        f"no way to read the disclaimer again: {labels}"
+
+    source = inspect.getsource(MainWindow._show_disclaimer)
+    assert "setMarkdown" in source and "space_out_markdown" in source
+    assert "stack" not in source, "this must not navigate back to the consent page"
+    window.close()
+
+
+def test_the_stylesheet_has_no_unresolved_placeholders():
+    """It is an f-string, and a `.format` template dropped into one keeps its doubled braces
+    and its `{PITCH}`. Qt then discards every rule it cannot parse — silently — so the window
+    loses whole categories of styling while looking merely "a bit different".
+
+    That is not hypothetical: pasting the scrollbar template in as `{SCROLLBAR}` cost every
+    page its scrollbar while the one widget that resolved it kept its own, which read as the
+    two having been swapped.
+    """
+    from wddrop_client import theme
+
+    sheet = theme.stylesheet()
+    assert "{{" not in sheet and "}}" not in sheet, "a format template leaked into the sheet"
+    for name in ("PITCH", "RULE", "INK", "STONE", "VELLUM"):
+        assert "{%s}" % name not in sheet, f"{name} was never substituted"
+    assert "QScrollBar" in sheet and "#" in sheet
+
+
+def test_a_dialog_wears_the_same_style_as_the_window(app, home):
+    """The sheet is set on the WINDOW, not on the application, so a dialog is styled only by
+    inheritance — and inheritance is the part that varies by platform. One plain grey window
+    among dark ones is the failure, and it only shows up on someone else's machine.
+    """
+    from wddrop_client.ui import MainWindow, ProgressDialog
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    dialog = ProgressDialog(window.t, window.cfg, window)
+    window._dress(dialog)
+    assert dialog.styleSheet() == window.styleSheet() != ""
+    window.close()
+
+
+def test_every_dialog_dresses_its_own_frame():
+    """The dark caption, the square corners and the border are DWM attributes, not anything
+    Qt draws — so a dialog that does not ask for them gets the platform's: a rounded, light-
+    capped window among squared dark ones. Inheriting the style sheet does nothing for the
+    frame, which is why this is checked separately from the sheet.
+    """
+    import inspect
+
+    from wddrop_client import ui
+
+    for name in ("SeeingDialog", "CalibrateDialog", "ProgressDialog"):
+        cls = getattr(ui, name, None)
+        if cls is None:
+            continue
+        source = inspect.getsource(cls)
+        assert "apply_titlebar" in source, f"{name} leaves its frame to the platform"
+
+    # The disclaimer's dialog is built inline rather than as a class.
+    assert "apply_titlebar" in inspect.getsource(ui.MainWindow._show_disclaimer)
+
+
+def test_buttons_on_the_settings_page_are_the_size_of_their_labels(app, home):
+    """A button stretched the width of the page reads as a banner rather than as something
+    to press — and two of them on one page come out different widths for no reason a player
+    could name. The settings helper already keeps input controls to their content; buttons
+    were left out of that rule, so the first one added worked around it by hand and the
+    second did not.
+    """
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window.show()
+    # THE PAGE HAS TO BE THE CURRENT ONE. A hidden page in a stack is never laid out, so
+    # every widget on it reports the layout's initial allocation — 640px each, buttons and
+    # all — and a width check against that measures nothing at all. It looked like a real
+    # failure for exactly as long as it took to show the page.
+    window.pages.setCurrentIndex(3)
+    for _ in range(3):
+        app.processEvents()
+    settings = window.pages.widget(3)
+    buttons = [b for b in settings.findChildren(QtWidgets.QPushButton) if b.text()]
+    assert len(buttons) >= 2
+    for button in buttons:
+        assert button.width() <= button.sizeHint().width() + 40, \
+            f"{button.text()!r} is stretched across the row"
+    window.close()
+
+
+def test_the_guide_scrollbar_reaches_the_window_edge(app, home):
+    """Every other scrollbar in the window touches an edge. A text view is normally inset by
+    its own padding and its page's margins, and since the scrollbar lives INSIDE the widget,
+    anything that insets the text insets the bar with it — leaving it floating in a channel
+    with background either side.
+
+    The fix is to move the inset from the widget to the document, so this checks both halves:
+    the view goes edge to edge, and the text is still held off it.
+    """
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window.show()
+    window.pages.setCurrentIndex(2)
+    for _ in range(3):
+        app.processEvents()
+
+    views = window.pages.widget(2).findChildren(QtWidgets.QTextBrowser)
+    assert views, "the guide has no text view"
+    view = views[0]
+    right_edge = view.mapTo(window, view.rect().topRight()).x() + 1
+    assert window.width() - right_edge == 0, "the view stops short of the window edge"
+    assert view.document().documentMargin() > 0, "the text is flush against the bar"
+    window.close()
+
+
+def test_an_ending_cannot_be_ticked_until_it_has_been_read(app, home):
+    """The question is the spoiler, so every ending starts under a bar — and a box under a
+    bar cannot be ticked.
+
+    Both halves matter. Covering the text protects a player three chapters short of any of
+    these from being told how the story goes by a dialog they did not open. Locking the box
+    protects the DATA: a tick given to a sentence nobody read is an answer this study would
+    rather not have, and it looks exactly like one that was.
+    """
+    from wddrop_client.ui import MainWindow, ProgressDialog
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    dialog = ProgressDialog(window.t, window.cfg, window)
+
+    key = next(iter(dialog.spoilers))
+    assert dialog.spoilers[key].covered(), "an ending is legible before it is asked for"
+    assert not dialog.boxes[key].isEnabled(), "an unread ending can be answered"
+
+    dialog.spoilers[key].set_covered(False)
+    assert dialog.boxes[key].isEnabled(), "reading it does not unlock the answer"
+    window.close()
+
+
+def test_the_players_own_answers_are_not_spoilers_to_them(app, home):
+    """A ticked ending is one they told us they watched happen, so it opens uncovered — and
+    stays that way when the master switch goes back off.
+
+    That second half is the one that bites: re-covering everything would also re-lock it, and
+    an answer that cannot be taken back is worse than one that was never offered.
+    """
+    from wddrop_client import progress
+    from wddrop_client.ui import MainWindow, ProgressDialog
+
+    cfg = make_config(accepted=True)
+    first = progress.ENDINGS[0].key
+    cfg.progress_bits, cfg.progress_width = progress.encode({first: True})
+
+    window = MainWindow(cfg, data=home)
+    dialog = ProgressDialog(window.t, cfg, window)
+    assert not dialog.spoilers[first].covered(), "their own answer is hidden from them"
+
+    dialog.reveal_all.setChecked(True)
+    assert not any(s.covered() for s in dialog.spoilers.values()), "show-all left one up"
+    dialog.reveal_all.setChecked(False)
+    assert dialog.spoilers[first].covered() is False, "their own answer was covered again"
+    assert dialog.boxes[first].isEnabled(), "an answer they gave can no longer be taken back"
+    assert all(dialog.spoilers[e.key].covered() for e in progress.ENDINGS[1:]), \
+        "the bars did not come back down"
+    window.close()
+
+
+def test_a_covered_ending_is_never_painted(app, home):
+    """The bar is drawn INSTEAD of the text, not over it. Painting the sentence and then
+    covering it would leave it in the widget's own pixels, one screenshot away — and this is
+    the kind of thing that is only ever checked once, here.
+    """
+    from PySide6 import QtGui
+
+    from wddrop_client import theme
+    from wddrop_client.ui import MainWindow, ProgressDialog
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    dialog = ProgressDialog(window.t, window.cfg, window)
+    dialog.show()
+    for _ in range(3):
+        app.processEvents()
+
+    spoiler = dialog.spoilers[next(iter(dialog.spoilers))]
+    image = spoiler.grab().toImage()
+    bar = QtGui.QColor(theme.RULE).rgb()
+    assert image.width() > 0 and image.height() > 0
+    assert all(image.pixel(x, y) == bar
+               for x in range(0, image.width(), 7)
+               for y in range(0, image.height(), 3)), "something shows through the bar"
+    window.close()
