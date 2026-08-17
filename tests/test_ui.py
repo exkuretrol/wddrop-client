@@ -57,7 +57,13 @@ def make_config(accepted: bool, locale: str = "ja") -> ClientConfig:
     the default happens to be.
     """
     state = ConsentState(accepted_hash=disclaimer_hash() if accepted else None)
-    return ClientConfig(consent=state, locale=locale)
+    # AND NOWHERE TO SEND ANYTHING. `server_url` defaults to the live study host, and this
+    # window makes requests that are deliberately NOT gated on sharing — a queued take-back
+    # goes out whether or not the player shares, because turning sharing off must not strand
+    # a request to remove something already sent. So these tests were reaching the real
+    # service, with random install_ids, and only a 422 in the log said so. The discard port
+    # refuses immediately, which is what every one of those paths is written to survive.
+    return ClientConfig(consent=state, locale=locale, server_url="http://127.0.0.1:9")
 
 
 def test_consent_is_a_gate_not_a_checkbox(app, home):
@@ -1673,3 +1679,576 @@ def test_a_players_build_offers_no_calibration_at_all(app, home, monkeypatch):
     assert not [text for text in labels if "Calibrat" in text or "See it" in text], labels
     assert window.cal_label.text(), "which sizes are ready is still said"
     window.close()
+
+
+def _begin_without_data(monkeypatch, window, dungeon: int = 7015) -> None:
+    """Start a session for the sake of what the BUTTONS do, with no data files present.
+
+    `_begin` loads `DungeonHints` from the vocabulary, which the published tree does not
+    carry — the data files are fetched into the build and nowhere else. A test about the
+    record page's controls must not need them, or it passes here and fails for anyone who
+    checks the public repository out with PySide6 installed.
+    """
+    from wddrop_client.labels import DungeonHints
+
+    monkeypatch.setattr(DungeonHints, "load", classmethod(lambda cls, *a, **k: None))
+    monkeypatch.setattr("wddrop_client.ui.CaptureWorker.start", lambda self: None)
+    window.dungeon.clear()
+    window.dungeon.addItem("dungeon", dungeon)
+    window._begin()
+
+
+# -- pause, and the Stop button that appears beside it -----------------------------------
+
+
+def test_starting_turns_the_button_into_pause_and_reveals_stop(app, home, monkeypatch):
+    """Start and Stop used to be one button, which made the common action — a town trip, a
+    phone call — cost the thing a dive IS. `elapsed_seconds` runs from the start of the
+    session, so stopping and starting again cuts one farming run into two and hands the
+    analysis a shape the player did not play."""
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    assert window.start.text() == window.t("Start recording")
+    # `isHidden`, not `isVisible`: this window is never shown, so nothing in it is visible
+    # and the assertion would pass whatever the button did.
+    assert window.stop_button.isHidden()
+
+    # `_begin` is what the button calls; the worker itself is not the subject here.
+    _begin_without_data(monkeypatch, window)
+
+    assert window.start.text() == window.t("Pause")
+    assert not window.stop_button.isHidden() and window.stop_button.isEnabled()
+
+    window._finished({"stop_reason": "user_stop", "dive_id": "d"})
+    assert window.start.text() == window.t("Start recording")
+    assert window.stop_button.isHidden()
+
+
+# -- the delete button, and where it is not offered ---------------------------------------
+
+
+def _reading(**over) -> dict:
+    from datetime import datetime, timezone
+
+    event = {"event_id": "e1", "provenance": "chest_direct", "dive": {"elapsed_seconds": 9},
+             "occurred_at": datetime.now(timezone.utc).isoformat(),
+             "qc": {"fps": 20.0},
+             "contents": [{"item_name": "蒼雫の鉱石", "item_id": 1, "quantity": 3,
+                           "match_confidence": 0.93}]}
+    event.update(over)
+    return event
+
+
+def test_only_a_shaky_reading_gets_a_delete_button(app, home):
+    """Rare on purpose. A button beside every record is a button that deletes good data, and
+    an EMPTY chest — the worst outcome and a real observation — must never carry one."""
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+
+    window._chest(_reading())
+    assert window.table.cellWidget(0, 3) is None, "a clean reading was offered a delete"
+
+    window._chest(_reading(event_id="e2", contents=[]))
+    assert window.table.cellWidget(1, 3) is None, "an empty chest was offered a delete"
+
+    window._chest(_reading(event_id="e3", contents=[
+        {"item_name": "蒼雫の鉱石", "item_id": 1, "quantity": 1, "qty_unknown": True}]))
+    assert window.table.cellWidget(2, 3) is not None, "an inferred quantity was not offered"
+
+
+def test_deleting_a_row_strikes_it_out_rather_than_removing_it(app, home):
+    """The row stays so the player can see what their button did — and so the indexes the
+    other rows' buttons captured keep pointing where they did."""
+    import json
+
+    from wddrop_client.config import records_path, spool_path
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    shaky = _reading(contents=[{"item_name": "蒼雫の鉱石", "item_id": 1, "quantity": 1,
+                                "qty_unknown": True}])
+    for path in (spool_path(), records_path()):
+        path.write_text(json.dumps(shaky) + "\n", encoding="utf-8")
+
+    window._chest(shaky)
+    window.table.cellWidget(0, 3).click()
+
+    assert window.table.rowCount() == 1, "the row was removed instead of struck through"
+    assert window.table.cellWidget(0, 3) is None
+    assert window.table.item(0, 3).text() == window.t("deleted")
+    assert window.table.item(0, 2).font().strikeOut()
+    assert not spool_path().read_text(encoding="utf-8").strip(), "it was still going to send"
+    assert not records_path().read_text(encoding="utf-8").strip()
+
+
+# -- the stats page shows one source at a time --------------------------------------------
+
+
+def test_the_headline_drops_the_source_it_is_not_showing(app, home):
+    """Filtering to chests makes the vein count zero, because `summarise` counts one source
+    at a time. Printing that zero reads as "you mined nothing" on a page that is deliberately
+    not showing mining."""
+    import json
+
+    from wddrop_client.config import records_path
+    from wddrop_client.ui import MainWindow
+
+    rows = [
+        {"event_id": "a", "provenance": "chest_direct",
+         "occurred_at": "2026-08-10T01:00:00+00:00", "dive": {"dungeon_id": 7015},
+         "contents": [{"item_name": "X", "quantity": 2}]},
+        {"event_id": "b", "provenance": "mining",
+         "occurred_at": "2026-08-10T02:00:00+00:00", "dive": {"dungeon_id": 7015},
+         "contents": [{"item_name": "Y", "quantity": 1}]},
+    ]
+    records_path().write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window._refresh_stats_page()
+    both = window.stats_headline.text()
+    assert window.t("chest") in both and window.t("vein") in both
+
+    window.stats_source.setCurrentIndex(window.stats_source.findData("chest"))
+    chests = window.stats_headline.text()
+    assert window.t("chest") in chests and window.t("vein") not in chests
+
+    window.stats_source.setCurrentIndex(window.stats_source.findData("vein"))
+    veins = window.stats_headline.text()
+    assert window.t("vein") in veins and window.t("chest") not in veins
+
+
+def test_the_paused_label_does_not_outlive_the_session(app, home, monkeypatch):
+    """Reported: pause, then stop, and the record page still says `paused`.
+
+    The counters line is drawn by a timer that `_finished` switches off, so whatever it drew
+    last is what stays on screen — and it read the RUNNER's flag, which outlives the session
+    that owned it and goes on answering True forever.
+    """
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    _begin_without_data(monkeypatch, window)
+
+    # A runner exists once "Preparing" is over; stand in for it, since the worker is stubbed.
+    from wddrop_client.runner import CaptureRunner
+
+    window.worker.runner = CaptureRunner.__new__(CaptureRunner)
+    import threading
+
+    window.worker.runner._pause = threading.Event()
+    window.worker.stats = {"frames": 12}
+
+    window._pause_or_resume()
+    assert window._paused and window.start.text() == window.t("Resume")
+    assert window.t("paused") in window.counters.text()
+
+    window._finished({"stop_reason": "user_stop", "dive_id": "d"})
+
+    assert not window._paused
+    assert window.t("paused") not in window.counters.text(), \
+        "the pause outlived the session it described"
+    assert window.start.text() == window.t("Start recording")
+
+
+def test_a_failed_session_leaves_the_page_in_the_same_state_a_stopped_one_does(app, home):
+    """`_failed` had drifted from `_finished` — it left the primary button styled as a live
+    session, and once pause existed it left the word on the counters too. One state, written
+    once."""
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window._paused = True
+    window.start.setProperty("running", "true")
+    window.stop_button.setVisible(True)
+
+    window._failed("the game window went away")
+
+    assert not window._paused
+    assert window.start.property("running") == "false"
+    assert window.stop_button.isHidden()
+    assert window.start.text() == window.t("Start recording")
+
+
+def test_one_source_drops_the_openings_term_as_well(app, home):
+    """With a source selected, `summarise` counts only that source — so openings is literally
+    the same number as the source's own count, printed twice in one headline."""
+    import json
+
+    from wddrop_client.config import records_path
+    from wddrop_client.ui import MainWindow
+
+    rows = [
+        {"event_id": "a", "provenance": "chest_direct",
+         "occurred_at": "2026-08-10T01:00:00+00:00", "dive": {"dungeon_id": 7015},
+         "contents": [{"item_name": "X", "quantity": 2}]},
+        {"event_id": "b", "provenance": "mining",
+         "occurred_at": "2026-08-10T02:00:00+00:00", "dive": {"dungeon_id": 7015},
+         "contents": [{"item_name": "Y", "quantity": 1}]},
+    ]
+    records_path().write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window._refresh_stats_page()
+    assert window.t("openings") in window.stats_headline.text()
+
+    for value in ("chest", "vein"):
+        window.stats_source.setCurrentIndex(window.stats_source.findData(value))
+        assert window.t("openings") not in window.stats_headline.text(), value
+        assert window.t("item lines") in window.stats_headline.text(), value
+
+
+# -- looking back at a session that has ended --------------------------------------------
+
+
+def _past_sessions(home, age_minutes: int = 30):
+    """Two finished sessions in the player's own file, as the runner would have left them.
+
+    RELATIVE TO NOW, not fixed dates. A take-back expires against the server's removal
+    window, so a fixture stamped with a literal date is a fixture whose Delete buttons are
+    disabled the day after it is written — which reads as the button being broken. Tests
+    about expiry pass their own age and say so.
+    """
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    from wddrop_client.config import records_path
+
+    base = datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
+
+    def at(minutes):
+        return (base + timedelta(minutes=minutes)).isoformat()
+
+    def dive(dive_id, start, rows):
+        return [{"event_id": f"{dive_id}-{i}", "provenance": p,
+                 "occurred_at": at(when), "qc": qc,
+                 "contents": [{"item_name": "蒼雫の鉱石", "item_id": 20000001,
+                               "quantity": 3, "match_confidence": 0.9}],
+                 "dive": {"dive_id": dive_id, "started_at": at(start),
+                          "elapsed_seconds": el, "dungeon_id": 7015,
+                          "stop_reason": "user_stop"}}
+                for i, (p, when, el, qc) in enumerate(rows)]
+
+    rows = (dive("d1", 0, [("chest_direct", 2, 120, {}),
+                           ("mining", 7, 420, {"panel_lines_unread": 1})])
+            + dive("d2", 10, [("mining", 12, 120, {})]))
+    records_path().write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows)
+                              + "\n", encoding="utf-8")
+    return rows
+
+
+def test_the_picker_lists_the_sessions_already_on_disk(app, home):
+    """Nothing new is recorded for this. A dive_id is minted at Start and dropped at Stop,
+    so one id is exactly one sitting, and every opening already carries it."""
+    from wddrop_client.ui import MainWindow
+
+    _past_sessions(home)
+    window = MainWindow(make_config(accepted=True), data=home)
+
+    assert not window.session.isHidden()
+    assert window.session.count() == 3, "two sessions, plus the live entry"
+    assert window.session.itemData(0) is None
+    # Newest first: the session a player wants is almost always the one they just played.
+    assert [window.session.itemData(i) for i in (1, 2)] == ["d2", "d1"]
+
+
+def test_the_picker_stays_out_of_the_way_when_there_is_nothing_to_pick(app, home):
+    """A dropdown holding one entry is a control that asks to be operated and does nothing."""
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    assert window.session.isHidden()
+
+
+def test_choosing_a_session_redraws_the_ledger_from_it(app, home):
+    """The same rendering the live ledger uses — two renderings of one record that differ in
+    any detail are a reason to doubt both."""
+    from wddrop_client.ui import MainWindow
+
+    _past_sessions(home)
+    window = MainWindow(make_config(accepted=True), data=home)
+    window.session.setCurrentIndex(window.session.findData("d1"))
+
+    assert window.table.rowCount() == 2
+    assert [window.table.item(r, 0).text() for r in range(2)] == ["02:00", "07:00"]
+    assert window.table.item(0, 1).text() == window.t("chest")
+    assert window.table.item(1, 1).text() == window.t("vein")
+    # The counters say the ledger is not live, and do NOT repeat the picker's own tally.
+    assert window.counters.text() == window.t("looking back")
+    # The shaky row still offers its Delete button: looking back is exactly when a player
+    # notices one.
+    assert window.table.cellWidget(0, 3) is None
+    assert window.table.cellWidget(1, 3) is not None, "an unread panel line was not offered"
+
+
+def test_the_live_ledger_comes_back_exactly_as_it_was(app, home):
+    """Rebuilt from what was DRAWN, not re-derived from the file: markers are local and a
+    chest opened seconds ago may still be in the outbox, so the file does not hold all of it.
+    """
+    from wddrop_client.ui import MainWindow
+
+    _past_sessions(home)
+    window = MainWindow(make_config(accepted=True), data=home)
+    window._chest({"event_id": "live", "provenance": "chest_direct",
+                   "dive": {"elapsed_seconds": 9}, "qc": {},
+                   "contents": [{"item_name": "透明な小石", "item_id": 20000000,
+                                 "quantity": 2, "match_confidence": 0.9}]})
+    window._add_row("00:20", "", window.t("next dive"), marker=True)
+    before = [[window.table.item(r, c).text() for c in range(3)]
+              for r in range(window.table.rowCount())]
+
+    window.session.setCurrentIndex(window.session.findData("d1"))
+    assert window.table.rowCount() == 2, "the past session did not replace the live one"
+    window.session.setCurrentIndex(0)
+
+    after = [[window.table.item(r, c).text() for c in range(3)]
+             for r in range(window.table.rowCount())]
+    assert after == before, "the live ledger did not come back as it was"
+
+
+def test_starting_a_dive_puts_the_live_ledger_back_first(app, home, monkeypatch):
+    """Otherwise this dive's chests append to last night's table, under its heading."""
+    from wddrop_client.ui import MainWindow
+
+    _past_sessions(home)
+    window = MainWindow(make_config(accepted=True), data=home)
+    window.session.setCurrentIndex(window.session.findData("d1"))
+    assert window.table.rowCount() == 2
+
+    _begin_without_data(monkeypatch, window)
+
+    assert window.session.currentData() is None
+    assert window.table.rowCount() == 0
+    assert not window.session.isEnabled(), "the picker stayed live while recording"
+
+
+def test_deleting_from_a_past_session_leaves_this_ones_counters_alone(app, home):
+    """The live counters are what THIS session recorded. Deleting a record from last night
+    must not decrement the tally of the one running now — and while looking back there may
+    not be one at all."""
+    from wddrop_client.ui import MainWindow
+
+    _past_sessions(home)
+    window = MainWindow(make_config(accepted=True), data=home)
+    window.chests, window.mined = 4, 7
+    window.session.setCurrentIndex(window.session.findData("d1"))
+
+    window.table.cellWidget(1, 3).click()          # the mining row with the unread line
+
+    assert (window.chests, window.mined) == (4, 7)
+    assert window.table.item(1, 3).text() == window.t("deleted")
+
+
+# -- how long a take-back can still be made ----------------------------------------------
+
+
+def test_a_record_still_in_the_outbox_never_loses_its_button(app, home):
+    """There is nothing to be late for: deleting it costs one line removed from a file and
+    the study is never told. With sharing off nothing ever drains, so nothing ever expires."""
+    import json
+
+    from wddrop_client.config import records_path, spool_path
+    from wddrop_client.ui import MainWindow
+
+    shaky = _reading(contents=[{"item_name": "蒼雫の鉱石", "item_id": 1, "quantity": 1,
+                                "qty_unknown": True}])
+    for path in (spool_path(), records_path()):
+        path.write_text(json.dumps(shaky, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window._chest(shaky)
+
+    button = window.table.cellWidget(0, 3)
+    assert button is not None and button.text() == window.t("Delete")
+    assert "never told" in button.toolTip(), button.toolTip()
+
+
+def test_a_sent_record_inside_the_window_keeps_its_button_and_no_clock(app, home):
+    """The label never carries a deadline. A number ticking down beside a row is an urgency
+    the player did not ask for, on a decision that should be made by looking at their own
+    screen."""
+    from wddrop_client.ui import MainWindow
+
+    _past_sessions(home, age_minutes=30)
+    window = MainWindow(make_config(accepted=True), data=home)
+    # STATED, not inherited from the shipped default: this test is about what the button does
+    # inside a window, and reading the deployed number would make it a test of that number.
+    window.cfg.removal_window_seconds = 3600
+    window.session.setCurrentIndex(window.session.findData("d1"))
+
+    button = window.table.cellWidget(1, 3)
+    assert not button.isHidden()
+    assert button.text() == window.t("Delete"), "a countdown reached the label"
+    # The row is 23 minutes old (the session began 30 ago, this happened 7 in), so an hour
+    # leaves about 37 minutes — known, and deliberately not shown.
+    left = window._seconds_left(window._deletable[0][2])
+    assert 2100 < left < 2300, left
+
+
+def test_once_the_window_has_closed_the_button_is_gone(app, home):
+    """Gone rather than offered-and-refused. The study keeps the row either way now, and a
+    button that would only remove the player's own copy leaves their export and the pooled
+    data disagreeing about a record neither can any longer fix.
+
+    Decided BEFORE it is ever seen, which is the ordinary case: looking back at last night's
+    session, every window closed hours ago."""
+    from wddrop_client.ui import MainWindow
+
+    # A day past a day-long window. Written as a multiple of the setting rather than as a
+    # literal age, so raising the window again does not quietly make this test pass for the
+    # wrong reason.
+    from wddrop_client.config import REMOVAL_WINDOW_SECONDS
+
+    _past_sessions(home, age_minutes=REMOVAL_WINDOW_SECONDS // 60 + 60)
+    window = MainWindow(make_config(accepted=True), data=home)
+    window.session.setCurrentIndex(window.session.findData("d1"))
+
+    assert window.table.cellWidget(1, 3) is None, "a take-back was offered that cannot work"
+    assert window._deletable == [], "an expired button stayed on the ticking list"
+
+
+def test_a_button_goes_when_its_window_closes_under_it(app, home):
+    """The tick is what takes it away, so a window that runs out while the player is looking
+    at the row does not leave a button that would now be refused."""
+    from wddrop_client.ui import MainWindow
+
+    _past_sessions(home, age_minutes=30)
+    window = MainWindow(make_config(accepted=True), data=home)
+    window.session.setCurrentIndex(window.session.findData("d1"))
+    button = window.table.cellWidget(1, 3)
+    assert not button.isHidden()
+
+    # The server shortens its window — learned on the next upload, not guessed at.
+    window._learn_removal_window({"removal_window_seconds": 60})
+    assert window.table.cellWidget(1, 3) is None
+    assert window._deletable == []
+
+
+def test_the_countdown_expires_slightly_early_rather_than_slightly_late(app, home):
+    """Counted from `occurred_at`, where the server counts from when it RECEIVED the row.
+    Those differ by the send delay and the upload, so this runs out first — the only safe
+    direction. Outliving the server's window would offer a deletion it then refuses, after
+    the player's own copy is already gone."""
+    from datetime import datetime, timedelta, timezone
+
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    window.cfg.removal_window_seconds = 3600
+    sent_at = datetime.now(timezone.utc) - timedelta(seconds=3600)
+    assert window._seconds_left({"occurred_at": sent_at.isoformat()}) <= 0
+    # And an event with no usable timestamp is treated as out of time, not as unlimited.
+    assert window._seconds_left({}) == 0.0
+
+
+def test_the_deadline_is_the_servers_and_is_remembered(app, home):
+    """A client that guesses at somebody else's rule eventually guesses wrong, and a value
+    that resets every launch is a guess. The ingest response carries it and this keeps it."""
+    from wddrop_client.config import ClientConfig, REMOVAL_WINDOW_SECONDS
+    from wddrop_client.ui import MainWindow
+
+    window = MainWindow(make_config(accepted=True), data=home)
+    assert window.cfg.removal_window_seconds == REMOVAL_WINDOW_SECONDS
+
+    window._learn_removal_window({"removal_window_seconds": 900})
+    assert window.cfg.removal_window_seconds == 900
+    assert ClientConfig.load().removal_window_seconds == 900, "it did not survive a restart"
+
+    # An older server that says nothing leaves it alone rather than resetting it.
+    window._learn_removal_window({"uploaded": 1})
+    assert window.cfg.removal_window_seconds == 900
+
+
+def test_browsing_a_session_puts_the_pickaxe_count_away(app, home):
+    """It is the number in your bag right now, and editing it against a session that ended
+    last night reads as editing that session. It also gives the picker the width this row
+    does not have."""
+    from wddrop_client.ui import MainWindow
+
+    _past_sessions(home)
+    window = MainWindow(make_config(accepted=True), data=home)
+    # Shown only where there is anything to mine, so the dungeon has to be one that has veins
+    # before there is a control to put away at all.
+    window.dungeon.setCurrentIndex(window.dungeon.findData(7015))
+    assert not window.pickaxes.isHidden()
+
+    window.session.setCurrentIndex(window.session.findData("d1"))
+    assert window.pickaxes.isHidden() and window.pickaxe_caption.isHidden()
+
+    window.session.setCurrentIndex(0)
+    assert not window.pickaxes.isHidden(), "it did not come back with the live ledger"
+
+    # And coming back must not put one on a floor that has no veins — `_refresh_mining`
+    # answers that, not this.
+    window.session.setCurrentIndex(window.session.findData("d1"))
+    window.dungeon.setCurrentIndex(0)
+    window.session.setCurrentIndex(0)
+    assert window.pickaxes.isHidden()
+
+
+def test_learning_a_longer_window_brings_the_buttons_back(app, home):
+    """`_refresh_take_backs` can only take buttons AWAY — it walks the ones already on
+    screen, and a row whose button was never built is not on that list. A window that grows
+    has to redraw the ledger, or the client goes on hiding take-backs the study would now
+    accept until something else happens to rebuild the table."""
+    from wddrop_client.ui import MainWindow
+
+    _past_sessions(home, age_minutes=180)
+    window = MainWindow(make_config(accepted=True), data=home)
+    window.cfg.removal_window_seconds = 3600            # what the client used to believe
+    window.session.setCurrentIndex(window.session.findData("d1"))
+    assert window.table.cellWidget(1, 3) is None, "3 hours old against a 1-hour window"
+
+    window._learn_removal_window({"removal_window_seconds": 86400})
+
+    assert window.table.cellWidget(1, 3) is not None, "the button did not come back"
+    assert window.cfg.removal_window_seconds == 86400
+
+
+def test_the_policy_is_only_asked_for_when_sharing_is_on(app, home, monkeypatch):
+    """With sharing off nothing is ever sent, so no removal window applies to anything and
+    there is no question to ask — and asking anyway would put a request on the wire for a
+    player who has said they do not want one."""
+    from wddrop_client.ui import MainWindow
+
+    asked = []
+    monkeypatch.setattr(MainWindow, "_ask_policy", lambda self: asked.append(1))
+
+    MainWindow(make_config(accepted=True), data=home)
+    app.processEvents()
+    assert asked == [], "a request went out with sharing off"
+
+    cfg = make_config(accepted=True)
+    cfg.share_uploads = True
+    MainWindow(cfg, data=home)
+    app.processEvents()
+    assert asked == [1]
+
+
+def test_no_window_built_here_can_reach_the_real_service(app, home):
+    """Belt and braces on the fixture above. Several paths in this window are deliberately
+    not gated on sharing, so a config left pointing at the default host makes the test suite
+    a client of the live study — which is how a random install_id came to be sent to it."""
+    for cfg in (make_config(accepted=True), _sharing_config("batch")):
+        assert "kuaz.dev" not in cfg.server_url, cfg.server_url
+        assert cfg.server_url.startswith("http://127.0.0.1"), cfg.server_url
+
+
+def test_turning_sharing_on_asks_the_service_for_its_rules(app, home, monkeypatch):
+    """The launch fetch has already been and gone by then, so without this the player runs on
+    a stale removal window until their next upload — the same staleness the fetch exists to
+    fix, arriving through a different door."""
+    from wddrop_client.ui import MainWindow
+
+    asked = []
+    monkeypatch.setattr(MainWindow, "_ask_policy", lambda self: asked.append(1))
+    window = MainWindow(make_config(accepted=True), data=home)
+    app.processEvents()
+    assert asked == []
+
+    window.share.setChecked(True)
+    assert asked == [1], "sharing went on without the rules being asked for"
+
+    window.share.setChecked(False)
+    assert asked == [1], "turning it off asked anyway"

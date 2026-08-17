@@ -98,15 +98,155 @@ STRINGS: dict[str, dict[str, str]] = {
                         "ko": "기록 시작", "de": "Aufnahme starten"},
     "Stop recording": {"zh_tw": "停止記錄", "zh_cn": "停止记录", "ja": "記録を停止",
                        "ko": "기록 중지", "de": "Aufnahme beenden"},
+    # PAUSE IS THE PRIMARY BUTTON DURING A SESSION, and Stop moves beside it. `elapsed_seconds`
+    # is measured from the start of the dive, so stopping for a town trip and starting again
+    # cuts one farming run into two — the exact shape the study is looking for in the data,
+    # manufactured by the interface.
+    "Pause": {"zh_tw": "暫停", "zh_cn": "暂停", "ja": "一時停止", "ko": "일시정지",
+              "de": "Pause"},
+    "Resume": {"zh_tw": "繼續", "zh_cn": "继续", "ja": "再開", "ko": "계속", "de": "Fortsetzen"},
+    "paused": {"zh_tw": "已暫停", "zh_cn": "已暂停", "ja": "一時停止中", "ko": "일시정지됨",
+               "de": "pausiert"},
+    "Paused — nothing is being read. The dive is still open.": {
+        "zh_tw": "已暫停 — 目前不會讀取畫面。這趟探索仍在進行。",
+        "zh_cn": "已暂停 — 目前不会读取画面。这趟探索仍在进行。",
+        "ja": "一時停止中 — 画面は読み取っていません。探索は続いています。",
+        "ko": "일시정지 — 화면을 읽지 않습니다. 이번 탐험은 계속 열려 있습니다.",
+        "de": "Pausiert — es wird nichts gelesen. Der Gang läuft weiter."},
+    "Still preparing — pause once it says it is recording.": {
+        "zh_tw": "還在準備中 — 等它說正在記錄後再暫停。",
+        "zh_cn": "还在准备中 — 等它说正在记录后再暂停。",
+        "ja": "まだ準備中です。記録中と表示されてから一時停止してください。",
+        "ko": "아직 준비 중입니다. 기록 중이라고 표시된 뒤에 일시정지하세요.",
+        "de": "Noch in Vorbereitung — pausiere erst, wenn Aufnahme angezeigt wird."},
+    "End this dive. Pause instead if you are coming back — stopping starts the clock "
+    "again from zero.": {
+        "zh_tw": "結束這趟探索。如果還會回來，請改按暫停 — 停止會讓計時從零重新開始。",
+        "zh_cn": "结束这趟探索。如果还会回来，请改按暂停 — 停止会让计时从零重新开始。",
+        "ja": "この探索を終了します。戻ってくるなら一時停止を。停止すると計測がゼロからやり直しになります。",
+        "ko": "이번 탐험을 끝냅니다. 다시 돌아올 거라면 일시정지를 쓰세요 — 중지하면 시간이 0부터 다시 시작됩니다.",
+        "de": "Diesen Gang beenden. Pausiere lieber, wenn du zurückkommst — beim Stoppen "
+              "läuft die Zeit wieder bei null los."},
     "Mark next dive": {"zh_tw": "標記下一趟", "zh_cn": "标记下一趟", "ja": "次の探索を記す",
                        "ko": "다음 탐험 표시", "de": "Nächsten Gang markieren"},
     "A pickaxe broke": {"zh_tw": "十字鎬壞了", "zh_cn": "鹤嘴镐坏了", "ja": "つるはしが壊れた",
                         "ko": "곡괭이가 부서짐", "de": "Spitzhacke zerbrochen"},
     "Upload": {"zh_tw": "上傳", "zh_cn": "上传", "ja": "アップロード", "ko": "업로드", "de": "Hochladen"},
+    # -- looking back at a session that has ended. Everything it shows was already on disk;
+    # a dive_id is minted at Start and dropped at Stop, so one id is exactly one sitting.
+    "This session": {"zh_tw": "這次記錄", "zh_cn": "这次记录", "ja": "今回の記録",
+                     "ko": "이번 기록", "de": "Diese Aufnahme"},
+    "looking back": {"zh_tw": "回顧", "zh_cn": "回顾", "ja": "過去の記録", "ko": "지난 기록",
+                     "de": "Rückblick"},
+    "nothing recorded": {"zh_tw": "沒有記錄", "zh_cn": "没有记录", "ja": "記録なし",
+                         "ko": "기록 없음", "de": "nichts aufgezeichnet"},
+    "Nothing was recorded in that session.": {
+        "zh_tw": "那次記錄沒有留下任何東西。", "zh_cn": "那次记录没有留下任何东西。",
+        "ja": "その記録には何も残っていません。", "ko": "그 기록에는 아무것도 남아 있지 않습니다.",
+        "de": "In dieser Aufnahme wurde nichts festgehalten."},
+    "Look back at a session you have already recorded. Nothing is sent or changed by "
+    "choosing one.": {
+        "zh_tw": "回顧你已經記錄過的某一次。選了不會傳送或更動任何東西。",
+        "zh_cn": "回顾你已经记录过的某一次。选了不会发送或更动任何东西。",
+        "ja": "すでに記録した回を見返します。選んでも送信も変更もされません。",
+        "ko": "이미 기록한 회차를 다시 봅니다. 선택해도 전송되거나 바뀌는 것은 없습니다.",
+        "de": "Sieh dir eine bereits aufgezeichnete Sitzung an. Durch die Auswahl wird "
+              "nichts gesendet oder verändert."},
     "at": {"zh_tw": "時間", "zh_cn": "时间", "ja": "時間", "ko": "시간", "de": "Zeit"},
     "from": {"zh_tw": "來源", "zh_cn": "来源", "ja": "取得元", "ko": "출처", "de": "Quelle"},
     "what it recorded": {"zh_tw": "記錄內容", "zh_cn": "记录内容", "ja": "記録した内容",
                          "ko": "기록한 내용", "de": "Aufgezeichnet"},
+    # -- taking a record back. Offered only on readings the client itself was unsure of; see
+    # removal.why_imprecise, and note that an empty chest is deliberately never one of them.
+    "Delete": {"zh_tw": "刪除", "zh_cn": "删除", "ja": "削除", "ko": "삭제", "de": "Löschen"},
+    "deleted": {"zh_tw": "已刪除", "zh_cn": "已删除", "ja": "削除済み", "ko": "삭제됨",
+                "de": "gelöscht"},
+    # THE THREE THINGS A DELETE BUTTON CAN PROMISE, and they are not the same promise. Inside
+    # the send delay nothing has left, so the deletion is certain and free. Once it has, the
+    # study will honour a take-back for a while and then stop, which is the server's rule and
+    # not this client's — so the button counts down against it and says so.
+    "This one was not read cleanly: {why}. It has not been sent yet, so deleting it "
+    "removes it here and the study is never told.": {
+        "zh_tw": "這筆沒有讀得很乾淨：{why}。它還沒送出去，所以刪掉只會刪這邊的，研究那邊完全不會知道。",
+        "zh_cn": "这条没有读得很干净：{why}。它还没送出去，所以删掉只会删这边的，研究那边完全不会知道。",
+        "ja": "この行はきれいに読み取れませんでした：{why}。まだ送信していないので、削除してもこちらから消えるだけで集計側には伝わりません。",
+        "ko": "이 기록은 깔끔하게 읽히지 않았습니다: {why}. 아직 전송되지 않아서 삭제해도 여기서만 사라지고 수집 측에는 전달되지 않습니다.",
+        "de": "Diese Zeile wurde nicht sauber gelesen: {why}. Sie wurde noch nicht gesendet "
+              "— Löschen entfernt sie nur hier, die Auswertung erfährt nichts davon."},
+    # NO DEADLINE IS EVER PRINTED. The study stops accepting take-backs after a while, and
+    # the button goes when it does; a number counting down beside a row is an urgency the
+    # player did not ask for, on a decision that should be made by looking at their own
+    # screen rather than at a clock.
+    "This one was not read cleanly: {why}. It is already at the study — deleting it asks "
+    "them to remove their copy too.": {
+        "zh_tw": "這筆沒有讀得很乾淨：{why}。它已經在研究那邊了 — 刪掉會一併請他們移除他們那份。",
+        "zh_cn": "这条没有读得很干净：{why}。它已经在研究那边了 — 删掉会一并请他们移除他们那份。",
+        "ja": "この行はきれいに読み取れませんでした：{why}。すでに集計側にあります — 削除するとあちらの控えも消すよう依頼します。",
+        "ko": "이 기록은 깔끔하게 읽히지 않았습니다: {why}. 이미 수집 측에 있습니다 — 삭제하면 그쪽 사본도 지워 달라고 요청합니다.",
+        "de": "Diese Zeile wurde nicht sauber gelesen: {why}. Sie liegt bereits bei der "
+              "Auswertung — beim Löschen wird auch deren Kopie angefordert."},
+    "Deleted. It had not been sent, so the study was never told about it.": {
+        "zh_tw": "已刪除。它還沒送出去，所以研究那邊從來不知道有這筆。",
+        "zh_cn": "已删除。它还没送出去，所以研究那边从来不知道有这条。",
+        "ja": "削除しました。まだ送信されていなかったので、集計側には一度も届いていません。",
+        "ko": "삭제했습니다. 아직 전송되지 않았으므로 수집 측에는 전달된 적이 없습니다.",
+        "de": "Gelöscht. Sie war noch nicht gesendet, die Auswertung hat sie nie gesehen."},
+    "Deleted here. Asking the study to remove its copy…": {
+        "zh_tw": "這邊已刪除。正在請研究那邊也移除他們的副本…",
+        "zh_cn": "这边已删除。正在请研究那边也移除他们的副本…",
+        "ja": "こちらでは削除しました。集計側にも削除を依頼しています…",
+        "ko": "여기서는 삭제했습니다. 수집 측에도 삭제를 요청하는 중…",
+        "de": "Hier gelöscht. Die Auswertung wird gebeten, ihre Kopie zu entfernen …"},
+    "Deleted from your own records.": {
+        "zh_tw": "已從你自己的記錄中刪除。", "zh_cn": "已从你自己的记录中删除。",
+        "ja": "あなた自身の記録から削除しました。", "ko": "본인 기록에서 삭제했습니다.",
+        "de": "Aus deinen eigenen Aufzeichnungen gelöscht."},
+    "{n} record(s) could not be removed from the study — too much time had passed. They "
+    "are gone from this computer.": {
+        "zh_tw": "有 {n} 筆無法從研究那邊移除 — 隔太久了。它們已經從這台電腦上消失。",
+        "zh_cn": "有 {n} 条无法从研究那边移除 — 隔太久了。它们已经从这台电脑上消失。",
+        "ja": "{n} 件は集計側から削除できませんでした — 時間が経ちすぎています。このパソコンからは消えています。",
+        "ko": "{n}건은 수집 측에서 삭제하지 못했습니다 — 시간이 너무 지났습니다. 이 컴퓨터에서는 사라졌습니다.",
+        "de": "{n} Aufzeichnung(en) konnten nicht aus der Auswertung entfernt werden — es "
+              "ist zu viel Zeit vergangen. Von diesem Rechner sind sie verschwunden."},
+    # WHY a row is offered a Delete button, in the player's own words. Passed to `t()` as a
+    # variable from removal.why_imprecise, so they are keyed by the same English sentence
+    # that module returns and must stay spelt identically in both places.
+    "the recording stopped while this was still on screen": {
+        "zh_tw": "記錄停止時，這個還在畫面上", "zh_cn": "记录停止时，这个还在画面上",
+        "ja": "画面に出ている途中で記録が止まりました",
+        "ko": "화면에 떠 있는 동안 기록이 멈췄습니다",
+        "de": "die Aufnahme endete, während das noch auf dem Bildschirm stand"},
+    "a line on the panel could not be read": {
+        "zh_tw": "面板上有一行讀不出來", "zh_cn": "面板上有一行读不出来",
+        "ja": "パネルの 1 行が読み取れませんでした",
+        "ko": "패널의 한 줄을 읽지 못했습니다",
+        "de": "eine Zeile im Fenster konnte nicht gelesen werden"},
+    "two very similar names had to be told apart": {
+        "zh_tw": "有兩個很像的名稱需要分辨", "zh_cn": "有两个很像的名称需要分辨",
+        "ja": "よく似た 2 つの名前を判別する必要がありました",
+        "ko": "아주 비슷한 이름 두 개를 구분해야 했습니다",
+        "de": "zwei sehr ähnliche Namen mussten unterschieden werden"},
+    "what this contained does not match the dungeon you chose": {
+        "zh_tw": "這裡面的東西和你選的迷宮對不上", "zh_cn": "这里面的东西和你选的迷宫对不上",
+        "ja": "中身が選んだダンジョンと合っていません",
+        "ko": "내용물이 선택한 던전과 맞지 않습니다",
+        "de": "der Inhalt passt nicht zum gewählten Dungeon"},
+    "the game printed no number, so the amount is assumed": {
+        "zh_tw": "遊戲沒有印出數字，數量是推測的", "zh_cn": "游戏没有印出数字，数量是推测的",
+        "ja": "ゲームが数を表示しなかったため、個数は推定です",
+        "ko": "게임이 숫자를 표시하지 않아 수량은 추정입니다",
+        "de": "das Spiel nannte keine Zahl, die Menge ist angenommen"},
+    "one name could not be placed in the game's own item list": {
+        "zh_tw": "有一個名稱在遊戲的道具表裡找不到", "zh_cn": "有一个名称在游戏的道具表里找不到",
+        "ja": "1 つの名前がゲームのアイテム一覧に見つかりませんでした",
+        "ko": "이름 하나를 게임의 아이템 목록에서 찾지 못했습니다",
+        "de": "ein Name ließ sich der Gegenstandsliste des Spiels nicht zuordnen"},
+    "one name was only just readable": {
+        "zh_tw": "有一個名稱只是勉強讀得出來", "zh_cn": "有一个名称只是勉强读得出来",
+        "ja": "1 つの名前はぎりぎり読み取れただけです",
+        "ko": "이름 하나는 가까스로 읽혔습니다",
+        "de": "ein Name war nur knapp lesbar"},
     # The name of this client. The GAME's own title differs per language, so the tool's does
     # too: a Traditional Chinese player knows 「辟邪除妖」 and would not recognise the Japanese
     # title, and the reverse. The part after it is what this does, in that language's own
@@ -243,6 +383,37 @@ STRINGS: dict[str, dict[str, str]] = {
         "zh_tw": "等我按下上傳再傳送", "zh_cn": "等我按下上传再发送",
         "ja": "アップロードを押したときに送信", "ko": "업로드를 누를 때 전송",
         "de": "Senden, wenn ich auf Hochladen klicke"},
+    # The undo window. What makes Delete mean "this never left your computer" rather than
+    # "please take this back" — the first is certain, the second the study may refuse.
+    "Hold each record before sending": {
+        "zh_tw": "每筆記錄先保留一段時間再送出", "zh_cn": "每条记录先保留一段时间再发送",
+        "ja": "送信前に各記録を保留する時間", "ko": "각 기록을 보낼 때까지 붙잡아 두기",
+        "de": "Jede Aufzeichnung vor dem Senden zurückhalten"},
+    "A record you can still delete is one that has not been sent yet. While it waits, "
+    "deleting it removes it here and the study is never told.": {
+        "zh_tw": "還刪得掉的記錄，就是還沒送出去的記錄。在等待期間刪除，只會刪掉這邊的，"
+                 "研究那邊完全不會知道。",
+        "zh_cn": "还删得掉的记录，就是还没送出去的记录。在等待期间删除，只会删掉这边的，"
+                 "研究那边完全不会知道。",
+        "ja": "まだ削除できる記録とは、まだ送信していない記録のことです。待っている間に削除すれば、"
+              "こちらから消えるだけで、集計側には何も伝わりません。",
+        "ko": "아직 지울 수 있는 기록이란 아직 전송되지 않은 기록입니다. 기다리는 동안 삭제하면 "
+              "여기서만 사라지고 수집 측에는 전혀 전달되지 않습니다.",
+        "de": "Eine Aufzeichnung, die du noch löschen kannst, ist eine, die noch nicht "
+              "gesendet wurde. Während sie wartet, entfernt Löschen sie nur hier — die "
+              "Auswertung erfährt nichts davon."},
+    "seconds": {"zh_tw": "秒", "zh_cn": "秒", "ja": "秒", "ko": "초", "de": "Sekunden"},
+    # The other half of "Sent 0. 3 still waiting." — without it, pressing Upload inside the
+    # grace period reads as the button having failed.
+    "{n} of those can still be deleted, so they have not been sent yet.": {
+        "zh_tw": "其中 {n} 筆還可以刪除，所以還沒送出。",
+        "zh_cn": "其中 {n} 条还可以删除，所以还没发送。",
+        "ja": "うち {n} 件はまだ削除できるため、送信していません。",
+        "ko": "그중 {n}건은 아직 삭제할 수 있어서 전송하지 않았습니다.",
+        "de": "{n} davon lassen sich noch löschen und wurden deshalb noch nicht gesendet."},
+    "send straight away": {
+        "zh_tw": "立刻送出", "zh_cn": "立刻发送", "ja": "すぐ送信", "ko": "즉시 전송",
+        "de": "sofort senden"},
     "Server": {"zh_tw": "伺服器", "zh_cn": "服务器", "ja": "サーバー", "ko": "서버", "de": "Server"},
     "Interface language": {"zh_tw": "介面語言", "zh_cn": "界面语言", "ja": "表示言語",
                            "ko": "인터페이스 언어", "de": "Sprache der Oberfläche"},

@@ -457,7 +457,7 @@ class CaptureRunner:
         self.stats = {"frames": 0, "hud_present": 0, "skipped_blank": 0,
                       "skipped_animating": 0, "skipped_same": 0,
                       "recognised": 0, "recognised_on_vanish": 0,
-                      "queued": 0, "chests": 0, "recorded": 0}
+                      "queued": 0, "chests": 0, "recorded": 0, "paused_frames": 0}
         self._quantities: dict[str, int | None] = {}
         # Per chest for the same reason as the two above: a score belongs to the reading that
         # produced it, and inheriting the previous chest's would describe the wrong line.
@@ -493,6 +493,41 @@ class CaptureRunner:
         self._stop = threading.Event()
         self._stop_reason: str | None = None
         self.stop_reason: str | None = None
+        # PAUSE, which is not a short stop. Stopping ends the dive, and the dive is the unit
+        # `elapsed_seconds` is measured against — so a player who stops to restock and starts
+        # again has cut one farming run into two, which is the exact shape the study is
+        # trying to see in the data rather than put there. A pause keeps the dive.
+        #
+        # Read once per frame from the same loop the stop flag is, and for the same reason:
+        # set from any thread, acted on between frames, where the tracker is consistent.
+        self._pause = threading.Event()
+        # How much of this dive was spent paused, in seconds of frame time. It rides along in
+        # QC rather than being subtracted from `elapsed_seconds`: elapsed is the study's
+        # independent variable and its meaning — wall time since entering — must not quietly
+        # change under data already collected. With this beside it the analysis can do the
+        # subtraction itself, on evidence, and see which records needed it.
+        self._paused_seconds = 0.0
+        self._paused_from: float | None = None
+
+    # -- pausing -----------------------------------------------------------------
+    def pause(self) -> None:
+        """Stop reading the screen, without ending the dive. Safe from any thread."""
+        self._pause.set()
+
+    def resume(self) -> None:
+        self._pause.clear()
+
+    @property
+    def paused(self) -> bool:
+        return self._pause.is_set()
+
+    @property
+    def paused_seconds(self) -> float:
+        return self._paused_seconds
+
+    def _pause_qc(self) -> dict:
+        """`paused_seconds` for an event, where there is any. See `_paused_seconds`."""
+        return {"paused_seconds": int(self._paused_seconds)} if self._paused_seconds >= 1 else {}
 
     # -- stopping ----------------------------------------------------------------
     def stop(self, reason: str = "user_stop") -> None:
@@ -556,10 +591,37 @@ class CaptureRunner:
                 self.stop_reason = self._stop_reason
                 break
             self.stats["frames"] += 1
+            now = self._clock(start, frame.t)
+            if self._pause.is_set():
+                # STILL PULLING FRAMES, reading none of them. The source keeps its own clock
+                # and its own buffers; abandoning the generator to sleep would mean resuming
+                # into whatever a live capture had piled up while nobody was looking.
+                if self._paused_from is None:
+                    self._paused_from = frame.t
+                    # Treated exactly like the HUD coming back, because it is the same event
+                    # from the tracker's side: the player has stopped looking at a chest. A
+                    # dialogue still open is closed and emitted with what was read, rather
+                    # than left to absorb whatever is on screen when they resume — and the
+                    # idle timeout, which would otherwise end the session during a long
+                    # pause, is held off by the same tick.
+                    pending_text = self._flush_pending(now)
+                    if pending_text:
+                        self.tracker.tick(now, False, pending_text)
+                self.tracker.tick(now, True, "")
+                self._last_t = frame.t
+                self._last_band_key = self._recognised_key = None
+                self._last_mask = None
+                # The panel too: whatever was up when the pause began is not evidence of a
+                # new swing when it ends.
+                self._panel_key, self._panel_emitted = None, False
+                self.stats["paused_frames"] = self.stats.get("paused_frames", 0) + 1
+                continue
+            if self._paused_from is not None:
+                self._paused_seconds += max(0.0, frame.t - self._paused_from)
+                self._paused_from = None
             if not checked_size:
                 checked_size = True
                 self._check_frame_size(frame.image.size)
-            now = self._clock(start, frame.t)
             # When the session ends, THIS is when it ended. See stop_session below.
             self._last_t = frame.t
             gray = frame.image.convert("L")
@@ -689,7 +751,7 @@ class CaptureRunner:
         self._mining_renderer = self._mining_renderers[self._index_key(size, spacing, window)]
         # Cut the pixels AFTER the size is settled but BEFORE anything slow: building an index
         # for a size not seen before took seconds over ~3,400 candidates — the panel's own pool
-        # is 247 now (`items.from_a_vein`), but it is still work, and the panel can
+        # is 236 now (`items.from_a_vein`), but it is still work, and the panel can
         # be dismissed while it runs.
         # Paired with their rows: the pickaxe pass reports by row index, and a row that
         # cannot be cut must not shift the rest along.
@@ -793,7 +855,7 @@ class CaptureRunner:
         LOCKED once something reads above the gate. The lock is what stops the drift that
         had this building nine indexes in a session that should need three: junk frames pass
         the size gate with whatever height they happen to have, and each new size costs a
-        build over the panel's own pool: 247 names now (`items.from_a_vein`), against the
+        build over the panel's own pool: 236 names now (`items.from_a_vein`), against the
         ~3,400 this was measured on.
         """
         from .capture.glyph import anchor_window
@@ -970,7 +1032,7 @@ class CaptureRunner:
         The sweep renders ONE candidate — the name the panel is already reading — per step,
         and correlates it against the same crop. That is a few milliseconds each, against
         ~4s and 74MB for an index over 3,400 candidates — less now that the panel is scored
-        against 247 (`items.from_a_vein`), and still worth not paying twenty times over. Only
+        against 236 (`items.from_a_vein`), and still worth not paying twenty times over. Only
         the winner is built, and only if it is a different spacing from the one in hand.
 
         Runs at most ONCE per session that it can be settled: it is a property of the
@@ -1124,7 +1186,7 @@ class CaptureRunner:
         Lazy was wrong in a way that cost data. The build took ~2.9s over 2,655 candidates
         and a mining panel is on screen for one to two seconds, so the FIRST swing of every
         fresh process was read while the index did not exist yet — the panel was gone by the
-        time it did. The panel's answer space is 247 names now rather than the band's 2,384
+        time it did. The panel's answer space is 236 names now rather than the band's 2,384
         (`items.from_a_vein`), so that build is a fraction of what it was — but it is not
         free, and a size the sweep has not met is still built with the panel on screen.
         Reported as "the first mine after starting is always missing", and
@@ -1427,6 +1489,8 @@ class CaptureRunner:
             # An unread line is a missing item, and a panel with one is not a complete
             # observation -- saying so is what lets the analysis exclude it on evidence.
             "qc": ({"fps": self.fps} if self.fps else {})
+            # How much of the elapsed time was NOT spent playing. See `_paused_seconds`.
+            | self._pause_qc()
             | ({"panel_lines_unread": unread} if unread else {})
             # Recorded so a reading that needed the tie-breaker is identifiable. It resolves
             # graded families, and a grade is exactly the kind of thing worth auditing.
@@ -2105,6 +2169,8 @@ class CaptureRunner:
         self._confidences.clear()
 
         qc = {"fps": self.fps} if self.fps else {}
+        # How much of the elapsed time above was NOT spent playing. See `_paused_seconds`.
+        qc.update(self._pause_qc())
         if self.dungeon_hints is not None:
             check = self.dungeon_hints.check(dungeon_id, [c["item_name"] for c in contents])
             qc.update(check)

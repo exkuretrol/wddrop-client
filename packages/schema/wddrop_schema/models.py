@@ -359,6 +359,16 @@ class IngestResult(BaseModel):
     duplicates: int
     rejected: int
     errors: list[str] = Field(default_factory=list)
+    # HOW LONG THESE ROWS CAN STILL BE TAKEN BACK, said on the way in rather than discovered
+    # on the way out. The client offers a Delete button on readings it was unsure of, and
+    # that button has to know when it stops being able to keep its promise — otherwise a
+    # player deletes a record, loses their own copy, and is told afterwards that the study
+    # kept its one. Learning it from the response means the client cannot drift out of step
+    # with a server that changes the setting.
+    #
+    # Optional, so an older server that does not send it is not an error: the client falls
+    # back to its own default. See `wddrop_client.config.REMOVAL_WINDOW_SECONDS`.
+    removal_window_seconds: int | None = None
 
 
 class DiveClose(BaseModel):
@@ -382,3 +392,32 @@ class DiveClose(BaseModel):
 
 class DiveCloseResult(BaseModel):
     updated: int
+
+
+class EventDelete(BaseModel):
+    """Take one record back, because the client itself was unsure of the reading.
+
+    NOT erasure, and the difference is the whole reason it is a separate call. Erasure is
+    "forget me", covers everything a player ever sent, and is reversible for a week because
+    the id is the only credential there is. This is one row, named by the player who recorded
+    it, on the strength of having been the one looking at the screen — so it is a hard delete
+    inside a bounded window rather than a mark inside a longer one.
+
+    Which records a player is offered this on is the client's judgement and is deliberately
+    narrow (`removal.why_imprecise`): an inferred quantity, an unplaceable name, a panel that
+    was not finished, junk that names another dungeon. An EMPTY chest is never one of them —
+    it is the worst outcome and a real observation, and deleting those one at a time would
+    inflate every rate the study measures.
+
+    `install_id`, not `player_id`: the client cannot compute the pseudonym, and it scopes the
+    delete to the caller's own rows. It travels in the BODY, like erasure's does, so it never
+    reaches an access log.
+    """
+
+    install_id: UUID
+    event_id: UUID
+
+
+class EventDeleteResult(BaseModel):
+    removed: int
+    window_seconds: int

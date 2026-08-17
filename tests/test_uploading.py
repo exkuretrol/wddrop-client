@@ -23,7 +23,7 @@ import sys
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -49,8 +49,43 @@ class Stub(BaseHTTPRequestHandler):
     delay = 0.0
     events: list = []
     closes: list = []
+    deletes: list = []
     order: list = []
     fail = False
+    # What `DELETE /v1/events` answers. 410 is "your removal window has closed", which the
+    # client must treat as an answer rather than as something to keep asking.
+    delete_status = 200
+    # `GET /v1/policy` — what the service will and will not do, asked with nothing attached.
+    policy: dict = {}
+    policy_status = 200
+    policy_requests = 0
+    policy_bodies: list = []
+
+    def do_GET(self):                                             # noqa: N802 (http.server)
+        type(self).policy_requests += 1
+        # RECORDED, because "sends nothing of the player's" is the claim being tested and a
+        # body on this request would break it.
+        length = self.headers.get("content-length")
+        type(self).policy_bodies.append(length)
+        status = type(self).policy_status
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(type(self).policy if status == 200
+                                    else {"detail": "not found"}).encode())
+
+    def do_DELETE(self):                                          # noqa: N802 (http.server)
+        body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))))
+        status = type(self).delete_status
+        if status == 200:
+            type(self).deletes.append(body)
+            type(self).order.append("delete")
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.end_headers()
+        reply = ({"removed": 1, "window_seconds": 3600} if status == 200
+                 else {"detail": {"reason": "removal_window_closed"}})
+        self.wfile.write(json.dumps(reply).encode())
 
     def do_POST(self):                                            # noqa: N802 (http.server)
         body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))))
@@ -80,8 +115,10 @@ class Stub(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def server():
-    Stub.delay, Stub.fail = 0.0, False
-    Stub.events, Stub.closes, Stub.order = [], [], []
+    Stub.delay, Stub.fail, Stub.delete_status = 0.0, False, 200
+    Stub.policy, Stub.policy_status = {}, 200
+    Stub.policy_requests, Stub.policy_bodies = 0, []
+    Stub.events, Stub.closes, Stub.deletes, Stub.order = [], [], [], []
     httpd = HTTPServer(("127.0.0.1", 0), Stub)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield Stub, f"http://127.0.0.1:{httpd.server_address[1]}"
@@ -94,13 +131,21 @@ def home(tmp_path, monkeypatch):
     return tmp_path
 
 
-def config(url: str) -> ClientConfig:
-    return ClientConfig(server_url=url, share_uploads=True,
+def config(url: str, *, delay: int = 0) -> ClientConfig:
+    """`send_delay_seconds=0` unless a test is ABOUT the hold.
+
+    Every event below is written with `occurred_at = now`, so the shipped 20-second grace
+    period would hold all of them — and every assertion here would silently become a test of
+    the delay instead of the thing it is named after. The two tests that are about the hold
+    pass a delay and say so.
+    """
+    return ClientConfig(server_url=url, share_uploads=True, send_delay_seconds=delay,
                         consent=ConsentState(accepted_hash=disclaimer_hash()))
 
 
-def an_event(name: str = "莫尼翁銀幣", dive_id: str | None = None) -> dict:
-    now = datetime.now(timezone.utc)
+def an_event(name: str = "莫尼翁銀幣", dive_id: str | None = None,
+             age_seconds: float = 0.0) -> dict:
+    now = datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
     return {
         "schema_version": 1,
         "event_id": str(uuid.uuid4()),
@@ -423,3 +468,199 @@ def test_a_refusal_still_sends_the_dive_endings(stale_server, home):
 
     assert result["blocked"]
     assert result["closed"] == 1
+
+
+# -- the send delay, and the delete button it exists for --------------------------------
+#
+# A record waits `send_delay_seconds` in the outbox before it is allowed to leave. That is
+# the whole difference between Delete meaning "this never left your computer" and it meaning
+# "please take this back", so the hold is not a nicety — it is what the first of those two
+# promises rests on.
+
+
+def test_a_fresh_record_is_held_and_nothing_is_sent(server, home):
+    """Held, not dropped. The line stays in the spool and goes with the next drain."""
+    from wddrop_client.config import spool_path
+
+    stub, url = server
+    spool_write(spool_path(), an_event("蒼雫の鉱石"))
+
+    result = upload_spool(config(url, delay=20), CaptureMode.OCR)
+
+    assert stub.events == [], "a record inside its grace period was sent"
+    assert result["held"] == 1
+    assert result["remaining"] == 1, "holding a record must not lose it"
+    assert spool_path().read_text(encoding="utf-8").strip(), "the spool was emptied anyway"
+
+
+def test_the_hold_is_per_record_not_per_drain(server, home):
+    """Read from each record's own `occurred_at`. Keying off the file, or off when the last
+    drain ran, would hold a whole session because its newest chest is a second old."""
+    from wddrop_client.config import spool_path
+
+    stub, url = server
+    spool_write(spool_path(),
+                an_event("蒼雫の鉱石", age_seconds=300),   # long past its window
+                an_event("透明な小石"))                     # just recorded
+
+    result = upload_spool(config(url, delay=20), CaptureMode.OCR)
+
+    assert [c["item_name"] for e in stub.events for c in e["contents"]] == ["蒼雫の鉱石"]
+    assert result["held"] == 1 and result["uploaded"] == 1
+
+
+def test_a_record_deleted_inside_the_delay_is_never_sent(server, home):
+    """The whole point of the hold. Nothing goes to the study, now or ever — and the
+    player's own copy loses it too, or their Stats page would keep counting a record they
+    were told was deleted."""
+    from wddrop_client.config import records_path, spool_path
+    from wddrop_client.removal import remove_record
+
+    stub, url = server
+    doomed, kept = an_event("蒼雫の鉱石"), an_event("透明な小石")
+    spool_write(spool_path(), doomed, kept)
+    spool_write(records_path(), doomed, kept)
+
+    outcome = remove_record(config(url, delay=20), doomed["event_id"])
+    assert outcome == {"unsent": True, "queued": False, "forgotten": True}
+
+    # Drained with no delay at all, so nothing is merely being held back by the clock.
+    upload_spool(config(url), CaptureMode.OCR)
+    assert [c["item_name"] for e in stub.events for c in e["contents"]] == ["透明な小石"]
+    assert doomed["event_id"] not in records_path().read_text(encoding="utf-8")
+
+
+def test_deleting_an_already_sent_record_queues_a_take_back(server, home):
+    """Out of the delay, so the study has it. The spool is what says so: a line is in there
+    until the server confirms it, which makes "still spooled" and "not yet sent" one fact
+    rather than two that have to be kept in step."""
+    from wddrop_client.config import deletes_path, records_path, spool_path
+    from wddrop_client.removal import remove_record
+
+    stub, url = server
+    sent = an_event("蒼雫の鉱石")
+    spool_write(spool_path(), sent)
+    spool_write(records_path(), sent)
+    upload_spool(config(url), CaptureMode.OCR)
+    assert len(stub.events) == 1 and not spool_path().read_text(encoding="utf-8").strip()
+
+    outcome = remove_record(config(url), sent["event_id"])
+
+    assert outcome["unsent"] is False and outcome["queued"] is True
+    assert sent["event_id"] in deletes_path().read_text(encoding="utf-8")
+    assert sent["event_id"] not in records_path().read_text(encoding="utf-8")
+
+
+def test_a_take_back_the_server_says_is_too_late_is_not_retried_forever(server, home):
+    """410 is an answer, not a failure. Asking again cannot change it, and a queue that
+    never drains is a promise the client would go on appearing to keep."""
+    from wddrop_client.config import deletes_path
+    from wddrop_client.uploader import drain_deletes, record_delete
+
+    stub, url = server
+    stub.delete_status = 410
+    record_delete(str(uuid.uuid4()))
+
+    result = drain_deletes(config(url))
+
+    assert result == {"removed": 0, "expired": 1, "pending": 0}
+    assert not deletes_path().read_text(encoding="utf-8").strip()
+
+
+def test_a_take_back_that_could_not_be_sent_is_kept(server, home):
+    """A deletion that evaporated because the connection blinked is one the player believes
+    they made. It waits, like an unsent event does."""
+    from wddrop_client.config import deletes_path
+    from wddrop_client.uploader import drain_deletes, record_delete
+
+    stub, url = server
+    stub.delete_status = 503
+    record_delete(str(uuid.uuid4()))
+
+    result = drain_deletes(config(url))
+
+    assert result["pending"] == 1 and result["removed"] == 0
+    assert deletes_path().read_text(encoding="utf-8").strip()
+
+
+def test_take_backs_are_sent_even_with_sharing_off(server, home):
+    """Sharing off stops new records LEAVING. It must not strand a request to remove one
+    that already has — and someone who has just turned sharing off is the likeliest person
+    of anyone to be making that request."""
+    from wddrop_client.uploader import drain_deletes, record_delete
+
+    stub, url = server
+    stub.delete_status = 200
+    cfg = config(url)
+    cfg.share_uploads = False
+    record_delete(str(uuid.uuid4()))
+
+    assert drain_deletes(cfg)["removed"] == 1
+
+
+def test_a_server_without_the_endpoint_does_not_queue_a_take_back_forever(server, home):
+    """A service older than the client has no `DELETE /v1/events`, and FastAPI answers a
+    method it does not route with 405 rather than 404 — which fell through to
+    `raise_for_status` and was kept. The queue could then never drain, and the request was
+    retried on every upload for the life of the install."""
+    from wddrop_client.config import deletes_path
+    from wddrop_client.uploader import drain_deletes, record_delete
+
+    stub, url = server
+    stub.delete_status = 405
+    record_delete(str(uuid.uuid4()))
+
+    result = drain_deletes(config(url))
+
+    assert result["pending"] == 0, "a request no server will ever accept was kept"
+    assert not deletes_path().read_text(encoding="utf-8").strip()
+
+
+def test_a_server_that_is_merely_down_keeps_the_take_back(server, home):
+    """The distinction the queue exists for: 5xx and a dead connection are the network, and
+    the line waits. Only an answer that retrying cannot improve is dropped."""
+    from wddrop_client.uploader import drain_deletes, record_delete
+
+    stub, url = server
+    stub.delete_status = 503
+    record_delete(str(uuid.uuid4()))
+
+    assert drain_deletes(config(url))["pending"] == 1
+
+
+# -- asking the service what its rules are -----------------------------------------------
+
+
+def test_the_policy_is_asked_for_without_sending_anything(server, home):
+    """A GET with no body and no install_id. It answers the one question the client cannot
+    work out for itself — how long a record can still be taken back — which otherwise only
+    arrives on an ingest response, i.e. only when there is something to upload."""
+    from wddrop_client.uploader import fetch_policy
+
+    stub, url = server
+    stub.policy = {"removal_window_seconds": 86400, "min_client_version": "0.5.2",
+                   "latest_client_version": "0.8.0"}
+
+    got = fetch_policy(config(url))
+
+    assert got["removal_window_seconds"] == 86400
+    assert stub.policy_requests == 1
+    assert stub.policy_bodies == [None], "the client sent something with the question"
+
+
+def test_an_older_service_without_the_endpoint_is_not_an_error(server, home):
+    """404 there means a service that predates this client. It has nothing to say yet, and
+    the client keeps the last answer it had rather than resetting to a default."""
+    from wddrop_client.uploader import fetch_policy
+
+    stub, url = server
+    stub.policy_status = 404
+    assert fetch_policy(config(url)) == {}
+
+
+def test_an_unreachable_service_leaves_the_client_on_what_it_knew(server, home):
+    """A rule that changes twice a year must not follow the network up and down."""
+    from wddrop_client.uploader import fetch_policy
+
+    cfg = config("http://127.0.0.1:9")            # discard port; nothing listens
+    assert fetch_policy(cfg) == {}

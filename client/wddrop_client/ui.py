@@ -77,6 +77,10 @@ MIN_RECOMMENDED_FPS = 16.0
 # the loop mutates it; every value in it is a plain int written by one thread, so a torn
 # read is not possible in CPython and a slightly stale count is harmless.
 STATS_INTERVAL_MS = 500
+# How often the Delete buttons re-read how long they have left. MM:SS, and nobody reads a
+# take-back deadline to the second; a per-second tick would re-read the spool sixty times a
+# minute to move a digit.
+TAKE_BACK_INTERVAL_MS = 5000
 
 
 def find_data(pattern: str, locale: str) -> Path | None:
@@ -1164,6 +1168,55 @@ class UploadWorker(QtCore.QThread):
         self.done.emit(result)
 
 
+class PolicyWorker(QtCore.QThread):
+    """Asks the service what its rules are, once a launch. Sends nothing of the player's.
+
+    On a thread like every other request this window makes: it runs while the window is
+    coming up, and five seconds of a window that does not repaint is a window that looks
+    broken.
+    """
+
+    done = QtCore.Signal(dict)
+
+    def __init__(self, cfg: ClientConfig, parent=None):
+        super().__init__(parent)
+        self.cfg = cfg
+
+    def run(self) -> None:                     # noqa: D102
+        from .uploader import fetch_policy
+
+        # `fetch_policy` never raises; there is no failure signal because there is no
+        # failure a player could act on. The client keeps the last answer it had.
+        self.done.emit(fetch_policy(self.cfg))
+
+
+class DeleteWorker(QtCore.QThread):
+    """Sends the queued take-backs, on a thread for the same reason the uploader is.
+
+    Separate from `UploadWorker` rather than folded into it, because it must run in a case
+    that one refuses: sharing turned OFF. That switch stops new records leaving; it must not
+    strand a request to remove one that already has — and the person who has just turned
+    sharing off is the likeliest of anyone to be making that request.
+    """
+
+    done = QtCore.Signal(dict)
+    failed = QtCore.Signal(str)
+
+    def __init__(self, cfg: ClientConfig, parent=None):
+        super().__init__(parent)
+        self.cfg = cfg
+
+    def run(self) -> None:                     # noqa: D102
+        try:
+            from .uploader import drain_deletes
+
+            result = drain_deletes(self.cfg)
+        except Exception as exc:                       # noqa: BLE001
+            self.failed.emit(str(exc))
+            return
+        self.done.emit(result)
+
+
 def _frame_note(line: dict) -> str:
     """`[episode-211/f_00109.png]` after a reading, in a checkout only.
 
@@ -1440,6 +1493,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker: CaptureWorker | None = None
         self.uploader: UploadWorker | None = None
         self._upload_again = False
+        self._delete_worker: DeleteWorker | None = None
+        # Whether a drain is already booked for records still inside their send delay.
+        self._held_retry = False
+        # Whether the session on screen is paused. The RUNNER's own flag is the one the loop
+        # reads; this is the window's copy, and it exists because the runner outlives the
+        # session — a paused-then-stopped session went on reporting itself paused, and the
+        # word stayed on the record page with nothing running behind it.
+        self._paused = False
         self._titlebar_themed = False
         self._asked_about_updates = False
         self._update_page = None
@@ -1452,6 +1513,12 @@ class MainWindow(QtWidgets.QMainWindow):
         # Dive markers and pickaxe-break notes. LOCAL ONLY — the server is never told, so
         # they live beside the spool rather than in it.
         self.markers: list[dict] = []
+        # The ledger rows of the session on screen now, so it can be put back after looking
+        # at an earlier one. See `_add_row`.
+        self._live_rows: list[tuple] = []
+        # (button, event) for every take-back on screen, so their countdowns can be ticked
+        # without walking the table.
+        self._deletable: list[tuple] = []
         self._started_at: datetime | None = None
         self._swings_since_break = 0
         self._pickaxe_lives: list[int] = []
@@ -1484,6 +1551,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.timer = QtCore.QTimer(self)
         self.timer.setInterval(STATS_INTERVAL_MS)
         self.timer.timeout.connect(self._refresh_stats)
+        # The take-back countdowns, on their own timer because they run whether or not a
+        # session is recording — a player looking back at last night's dive still has to see
+        # how long they have. Five seconds: the number is MM:SS and nobody is reading it to
+        # the second, and a per-second tick would re-read the spool sixty times a minute.
+        self.take_back_timer = QtCore.QTimer(self)
+        self.take_back_timer.setInterval(TAKE_BACK_INTERVAL_MS)
+        self.take_back_timer.timeout.connect(self._refresh_take_backs)
+        self.take_back_timer.start()
 
         # `general_ok`, NOT "is there a hash". They are different questions the moment the
         # disclaimer text changes: acceptance is stored as a hash OF THE TEXT so that editing
@@ -1500,6 +1575,26 @@ class MainWindow(QtWidgets.QMainWindow):
         if (cfg.consent.general_ok and cfg.share_uploads
                 and cfg.send_mode in AUTOMATIC_MODES):
             QtCore.QTimer.singleShot(0, lambda: self._upload(quiet=True))
+        # And any take-back the last run could not send. NOT gated on sharing: this asks the
+        # study to remove something, which the sharing switch has no business preventing.
+        # Mostly it will find nothing, and where it finds something the server's own window
+        # may already have closed — which it will say, and which the player is then told.
+        if cfg.consent.general_ok:
+            from .uploader import pending_deletes
+
+            if pending_deletes():
+                QtCore.QTimer.singleShot(0, self._drain_deletes)
+        # AND WHAT THE SERVICE'S RULES ARE, which the client cannot work out for itself.
+        #
+        # Only where sharing is on. With it off nothing is ever sent, so no removal window
+        # applies to anything and there is no question to ask — and asking anyway would put a
+        # request on the wire for a player who has said they do not want one.
+        #
+        # Here rather than on the back of an upload, which is where it used to be: an upload
+        # only happens when there is something to send, and the moment this number is wanted
+        # is a player opening the window to look back at a session they sent yesterday.
+        if cfg.consent.general_ok and cfg.share_uploads:
+            QtCore.QTimer.singleShot(0, self._ask_policy)
 
     # -- shell ---------------------------------------------------------------------
     def _build_shell(self) -> QtWidgets.QWidget:
@@ -1624,10 +1719,28 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pickaxes.valueChanged.connect(self._pickaxes_changed)
         bl.addWidget(self.pickaxes)
         bl.addStretch(1)
-        self._no_wheel(self.dungeon, self.floor, self.pickaxes)
         self.counters = QtWidgets.QLabel("")
         self.counters.setObjectName("meta")
         bl.addWidget(self.counters)
+        # LOOKING BACK AT A SESSION THAT HAS ENDED. Everything it needs is already on disk —
+        # a `dive_id` is minted at Start and dropped at Stop, so one id is exactly one
+        # sitting, and every opening carries it along with the dungeon and the elapsed clock.
+        # Nothing new is recorded for this.
+        #
+        # On this row rather than a page of its own, because what it changes IS this row's
+        # table: the ledger stops being "what is happening" and becomes "what happened then".
+        # Hidden until there is a second thing to pick, and locked while recording — the
+        # ledger has to be the live one while a dive is running, or a chest lands in a table
+        # nobody is looking at.
+        self.session = Combo()
+        self.session.setMinimumWidth(200)
+        self.session.setToolTip(self.t(
+            "Look back at a session you have already recorded. Nothing is sent or changed by "
+            "choosing one."))
+        self.session.setVisible(False)
+        self.session.currentIndexChanged.connect(self._session_changed)
+        bl.addWidget(self.session)
+        self._no_wheel(self.dungeon, self.floor, self.pickaxes, self.session)
         layout.addWidget(bar)
 
         self.pickaxe_label = QtWidgets.QLabel("")
@@ -1635,14 +1748,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.pickaxe_label.setContentsMargins(20, 0, 20, 8)
         layout.addWidget(self.pickaxe_label)
 
-        self.table = QtWidgets.QTableWidget(0, 3)
+        # FOUR columns, and the fourth is empty on almost every row. It carries the take-back
+        # button, which is offered only where the client itself was unsure of the reading —
+        # see removal.why_imprecise for which those are, and why an empty chest is never one.
+        self.table = QtWidgets.QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(
-            [self.t("at"), self.t("from"), self.t("what it recorded")])
-        self.table.horizontalHeader().setStretchLastSection(True)
+            [self.t("at"), self.t("from"), self.t("what it recorded"), ""])
+        self.table.horizontalHeader().setStretchLastSection(False)
+        self.table.horizontalHeader().setSectionResizeMode(
+            2, QtWidgets.QHeaderView.Stretch)
         self.table.horizontalHeader().setDefaultAlignment(
             QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         self.table.setColumnWidth(0, 74)
         self.table.setColumnWidth(1, 90)
+        self.table.setColumnWidth(3, 96)
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
@@ -1668,11 +1787,26 @@ class MainWindow(QtWidgets.QMainWindow):
         fl = QtWidgets.QHBoxLayout(foot)
         fl.setContentsMargins(20, 14, 20, 14)
         fl.setSpacing(10)
+        # ONE BUTTON THAT STARTS AND THEN PAUSES, with Stop appearing beside it. Start and
+        # Stop used to be the same button, which made the common action — a break, a town
+        # trip, a phone call — cost the thing a dive IS: `elapsed_seconds` is measured from
+        # the start of the session, so stopping and starting again splits one farming run
+        # into two and hands the analysis a shape the player did not play. Pausing keeps the
+        # dive; stopping stays available, one button to the right, and still ends it.
         self.start = QtWidgets.QPushButton(self.t("Start recording"))
         self.start.setToolTip(self.t('Begin reading the game window. Chests and veins are recorded as they happen.'))
         self.start.setObjectName("primary")
         self.start.clicked.connect(self._toggle)
         fl.addWidget(self.start)
+        # Hidden until there is a session to stop. A Stop button beside Start with nothing
+        # running is two ways to read one state.
+        self.stop_button = QtWidgets.QPushButton(self.t("Stop recording"))
+        self.stop_button.setToolTip(self.t(
+            'End this dive. Pause instead if you are coming back — stopping starts the clock '
+            'again from zero.'))
+        self.stop_button.clicked.connect(self._stop_recording)
+        self.stop_button.setVisible(False)
+        fl.addWidget(self.stop_button)
         self.mark = QtWidgets.QPushButton(self.t("Mark next dive"))
         self.mark.setToolTip(self.t('Say that the next chest belongs to a new dive, when the client cannot see the change itself.'))
         self.mark.clicked.connect(self._mark_dive)
@@ -1909,9 +2043,9 @@ class MainWindow(QtWidgets.QMainWindow):
         A single group loses its heading: a table of items under a heading that says "items"
         is a heading that tells nobody anything.
         """
-        from .items import CURRENCY, ItemCategories
+        from .items import CURRENCY
 
-        categories = ItemCategories()
+        categories = self._item_categories()
         buckets = {}
         for row in rows:
             buckets.setdefault(categories.of(row), []).append(row)
@@ -1919,6 +2053,23 @@ class MainWindow(QtWidgets.QMainWindow):
             return [("", rows)] if rows else []
         order = [("item", self.t("Items")), (CURRENCY, self.t("Currency"))]
         return [(label, buckets[key]) for key, label in order if buckets.get(key)]
+
+    def _item_categories(self):
+        """Which heading a row goes under, from the GAME's own item table.
+
+        Keyed off `cfg.locale`, not the window's language: `Item::SaleOnly` is a fact about an
+        id and is the same in every vocabulary, so this reads the one the recogniser matched
+        against rather than a translation of it.
+
+        Loaded once and kept, like the name table beside it — this is asked per row, and the
+        page redraws in full on every refresh.
+        """
+        if getattr(self, "_categories", None) is None:
+            from .items import ItemCategories
+
+            self._categories = ItemCategories.load(
+                find_data("vocab.{locale}.json", self.cfg.locale))
+        return self._categories
 
     def _item_names(self):
         """What to call an item in the language the WINDOW is in.
@@ -1959,16 +2110,31 @@ class MainWindow(QtWidgets.QMainWindow):
                         openings=overall["openings"], lines=overall["lines"],
                         days=len(data["days"])))
 
-        self.stats_headline.setText(
-            f"{data['openings']} {self.t('openings')} · "
-            f"{data['chests']} {self.t('chest')} · {data['veins']} {self.t('vein')} · "
-            f"{data['lines']} {self.t('item lines')}")
+        # ONLY THE SOURCE BEING LOOKED AT, and on one source the OPENINGS term goes too.
+        #
+        # `summarise` counts one source at a time, so filtering to chests made the vein count
+        # a zero that is an artefact of the filter — and it read as a measurement ("you mined
+        # nothing") on a page deliberately not showing mining. The openings term is the same
+        # problem from the other end: with one source selected it is literally the same
+        # number as the source's own count, printed twice in one line, and two numbers that
+        # look like they should agree invite a reader to work out why they do.
+        source = self.stats_source.currentData()
+        if source is None:
+            counts = [f"{data['openings']} {self.t('openings')}",
+                      f"{data['chests']} {self.t('chest')}",
+                      f"{data['veins']} {self.t('vein')}"]
+        elif source == "chest":
+            counts = [f"{data['chests']} {self.t('chest')}"]
+        else:
+            counts = [f"{data['veins']} {self.t('vein')}"]
+        counts.append(f"{data['lines']} {self.t('item lines')}")
+        self.stats_headline.setText(" · ".join(counts))
         # What the ore cost. A share of the ore says nothing without it, and it is the one
         # number a player cannot reconstruct afterwards from the items alone.
         # Only where it means something. Pickaxes are a mining cost, and on the chest view
         # the number is true but answers a question nobody asked there.
         broken, veins = data["broken"], data["veins"]
-        looking_at_veins = self.stats_source.currentData() in (None, "vein")
+        looking_at_veins = source in (None, "vein")
         if looking_at_veins and (broken or veins):
             share = f" ({broken / veins * 100:.1f}%)" if veins else ""
             self.stats_pickaxes.setText(f"{self.t('pickaxes broken')} ×{broken}{share}")
@@ -2153,6 +2319,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.send_mode.setCurrentIndex(max(0, self.send_mode.findData(self.cfg.send_mode)))
         self.send_mode.currentIndexChanged.connect(self._send_mode_changed)
         row(self.t("When to send"), self.send_mode)
+
+        # THE UNDO WINDOW, and it is a setting because its only cost is patience. A record
+        # waits this long in the outbox before it is allowed to leave, which is the whole
+        # difference between the Delete button meaning "this never left your computer" and it
+        # meaning "please take this back" — the first is certain and the second the study may
+        # refuse. Nothing is at risk while it waits: the record is on disk before any network
+        # attempt either way, exactly as it is with a batch.
+        self.send_delay = QtWidgets.QSpinBox()
+        self.send_delay.setRange(0, 600)
+        self.send_delay.setSuffix(" " + self.t("seconds"))
+        self.send_delay.setSpecialValueText(self.t("send straight away"))
+        self.send_delay.setValue(int(self.cfg.send_delay_seconds))
+        self.send_delay.valueChanged.connect(self._send_delay_changed)
+        self._no_wheel(self.send_delay)
+        row(self.t("Hold each record before sending"), self.send_delay,
+            self.t("A record you can still delete is one that has not been sent yet. While "
+                   "it waits, deleting it removes it here and the study is never told."))
 
         # SHOWN, NOT EDITABLE. Where a player's records go is not a preference: a wrong
         # value here sends them nowhere, or somewhere nobody intended, and "change your
@@ -2548,11 +2731,27 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cfg.share_uploads = bool(on)
         self.cfg.save()
         self._refresh_spool()
+        # Turning sharing ON is the moment the service's rules start applying to this player,
+        # and the launch fetch has already been and gone. Without this they run on whatever
+        # removal window the client last believed until their next upload — which is the same
+        # staleness the fetch was added to fix, arriving through a different door.
+        if on:
+            self._ask_policy()
 
     def _send_mode_changed(self, _index: int) -> None:
         self.cfg.send_mode = self.send_mode.currentData()
         self.cfg.save()
         self._refresh_spool()
+
+    def _send_delay_changed(self, value: int) -> None:
+        """Takes effect on the NEXT drain, and on records already waiting.
+
+        The hold is read from each record's own `occurred_at` at drain time rather than
+        stamped on it when it was written, so shortening this releases a backlog immediately
+        instead of leaving records held under a rule nobody is applying any more.
+        """
+        self.cfg.send_delay_seconds = int(value)
+        self.cfg.save()
 
     def _ui_locale_changed(self, _index: int) -> None:
         self.cfg.ui_locale = self.ui_locale.currentData()
@@ -2726,6 +2925,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self._refresh_start_enabled()
         self._refresh_spool()
         self._refresh_pickaxes()
+        # AFTER the catalogue, because a session is labelled with its dungeon's name and this
+        # is where that table arrives. On launch it is the only thing that fills the picker —
+        # a player opening the window to look at last night's dive has not started a session
+        # for `_set_setup_enabled` to fill it from.
+        self._refresh_sessions()
         if not self._ready:
             # WHICH of the two is missing, because the fixes have nothing in common — and
             # because a player's build cannot do the first one at all: calibration is offered
@@ -2942,12 +3146,55 @@ class MainWindow(QtWidgets.QMainWindow):
     def _see(self) -> None:
         SeeingDialog(self.args_for(), self, t=self.t).exec()
 
+    def _running(self) -> bool:
+        return self.worker is not None and self.worker.isRunning()
+
     def _toggle(self) -> None:
-        if self.worker is not None and self.worker.isRunning():
-            self.start.setEnabled(False)
-            self.worker.stop("user_stop")
+        """The primary button: Start when nothing is running, Pause/Resume when something is."""
+        if self._running():
+            self._pause_or_resume()
             return
         self._begin()
+
+    def _pause_or_resume(self) -> None:
+        """Stop reading the screen without ending the dive, and start again.
+
+        The runner does not exist for the first few seconds of a session — building the
+        render index is what "Preparing…" is — so there is a window where this button is
+        showing and there is nothing behind it. Saying so beats a press that does nothing.
+        """
+        runner = getattr(self.worker, "runner", None)
+        if runner is None:
+            self._say(self.t("Still preparing — pause once it says it is recording."),
+                      "attention")
+            return
+        if runner.paused:
+            runner.resume()
+            self._paused = False
+            self.start.setText(self.t("Pause"))
+            self._say(self.t("Recording. Play normally."), "recording")
+        else:
+            runner.pause()
+            self._paused = True
+            self.start.setText(self.t("Resume"))
+            # Said plainly, because a paused client looks exactly like a running one: the
+            # frame counter stops and nothing else changes. A player who does not notice
+            # they are paused records a dive with a hole in it.
+            self._say(self.t("Paused — nothing is being read. The dive is still open."),
+                      "attention")
+        # Marking a dive while paused would file the mark at a moment nobody played.
+        self.mark.setEnabled(not self._paused)
+        self._refresh_counters(getattr(self.worker, "stats", None) or {})
+
+    def _stop_recording(self) -> None:
+        """End the dive. Cooperative — the loop finishes its frame and closes cleanly."""
+        if not self._running():
+            return
+        self.start.setEnabled(False)
+        self.stop_button.setEnabled(False)
+        # A paused loop still reads the stop flag every frame — the pause check comes after
+        # it — so this does not need the session resumed first.
+        self.worker.stop("user_stop")
 
     def _begin(self) -> None:
         record = str(self.data / "capture") if self.record.isChecked() else None
@@ -2961,15 +3208,28 @@ class MainWindow(QtWidgets.QMainWindow):
         from .labels import DungeonHints
 
         self._hints = DungeonHints.load(args.vocab)
+        # BACK TO THE LIVE LEDGER FIRST. Starting a dive while an earlier session is on
+        # screen would append this one's chests to that one's table, under its heading.
+        self._live_rows.clear()
+        # The buttons of the previous session go with its rows. Left on the list they are
+        # deleted Qt objects pointing at row numbers this table no longer has.
+        self._deletable.clear()
+        if self.session.currentData() is not None:
+            self.session.blockSignals(True)
+            self.session.setCurrentIndex(0)
+            self.session.blockSignals(False)
         self.table.setRowCount(0)
         self._show_empty()
         self.chests = self.mined = 0
         self._started_at = datetime.now(timezone.utc)
         self._say(self.t("Preparing. This takes a few seconds."))
-        self.start.setText(self.t("Stop recording"))
+        self._paused = False
+        self.start.setText(self.t("Pause"))
         self.start.setProperty("running", "true")
         self.start.style().unpolish(self.start)
         self.start.style().polish(self.start)
+        self.stop_button.setVisible(True)
+        self.stop_button.setEnabled(True)
         self._set_setup_enabled(False)
         self.mark.setEnabled(True)
         self.worker = CaptureWorker(self.cfg, args, self)
@@ -2992,12 +3252,16 @@ class MainWindow(QtWidgets.QMainWindow):
         `_pickaxes_changed` carries the correction into the runner.
         """
         for widget in (self.dungeon, self.floor, self.fps, self.record,
-                       self.record_all, self.upload,
+                       self.record_all, self.upload, self.session,
                        self.ui_locale, self.share, self.send_mode, self.cal_button):
             if widget is not None:                     # the calibrate button is dev-only
                 widget.setEnabled(enabled)
         if enabled:
             self._refresh_spool()
+            # The session that has just ended is now one of the choices, and its counts are
+            # final. Refreshed here rather than on the record page being shown, because this
+            # is the moment they change.
+            self._refresh_sessions()
 
     def _elapsed(self) -> str:
         if self._started_at is None:
@@ -3021,7 +3285,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.empty.setText(text)
         self.records.setCurrentWidget(self.empty)
 
-    def _add_row(self, at: str, kind: str, what: str, marker: bool = False) -> int:
+    def _add_row(self, at: str, kind: str, what: str, marker: bool = False,
+                 event: dict | None = None, remember: bool = True,
+                 spooled: set | None = None) -> int:
+        # KEPT SO THE LIVE LEDGER CAN BE PUT BACK. Looking at an earlier session rebuilds
+        # this table from disk, and the session running now is not on disk in the same shape
+        # — markers are local, and a chest opened seconds ago may still be in the outbox. So
+        # what was drawn is what gets redrawn, rather than re-derived from a file that does
+        # not hold all of it. `remember=False` is how a replay avoids recording itself.
+        if remember:
+            self._live_rows.append((at, kind, what, marker, event))
         row = self.table.rowCount()
         self.records.setCurrentWidget(self.table)
         self.table.insertRow(row)
@@ -3031,7 +3304,13 @@ class MainWindow(QtWidgets.QMainWindow):
         source = QtWidgets.QTableWidgetItem(kind)
         source.setForeground(QtGui.QColor(theme.MUTED))
         body = QtWidgets.QTableWidgetItem(what)
-        if marker:
+        # THE CONFLICT COLOUR IS A PROPERTY OF THE RECORD, so it is applied here rather than
+        # by the caller afterwards. Set on the widget after `_add_row` returned, it was lost
+        # every time the ledger was rebuilt — looking at an earlier session and coming back
+        # silently un-flagged the one row on the page that says the dungeon may be wrong.
+        if ((event or {}).get("qc") or {}).get("label_conflict"):
+            body.setForeground(QtGui.QColor(theme.EMBER))
+        elif marker:
             body.setForeground(QtGui.QColor(theme.MUTED))
             font = body.font()
             font.setItalic(True)
@@ -3039,33 +3318,426 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table.setItem(row, 0, when)
         self.table.setItem(row, 1, source)
         self.table.setItem(row, 2, body)
+        if event is not None:
+            self._offer_take_back(row, event, spooled)
         self.table.scrollToBottom()
         return row
+
+    # -- looking back at a session that has ended ----------------------------------
+    def _refresh_sessions(self) -> None:
+        """Fill the picker from the player's own file. Keeps whatever is selected.
+
+        Rebuilt rather than appended to, because a session can leave it: taking back the last
+        record of a dive removes the only rows that named it, and an entry pointing at a
+        session with nothing in it is a table that draws empty for no stated reason.
+
+        Hidden while there is nothing to pick. A dropdown holding one entry is a control that
+        asks to be operated and does nothing.
+        """
+        from .stats import sessions
+
+        chosen = self.session.currentData()
+        found = sessions(records_path())
+        names = self._place_names()
+        # THE DUNGEON'S NAME ONLY WHERE IT SEPARATES ANYTHING. A player who farms one place
+        # gets the same fourteen characters on every line, pushing the time and the counts —
+        # the parts they are choosing BY — out of a control this row has no width to spare
+        # for. It is in the tooltip either way.
+        several = len({row["dungeon_id"] for row in found}) > 1
+        wanted = [(self.t("This session"), None, "")]
+        for row in found:
+            wanted.append((self._session_label(row, names if several else {}),
+                           row["dive_id"], self._session_detail(row, names)))
+        current = [(self.session.itemText(i), self.session.itemData(i),
+                    self.session.itemData(i, QtCore.Qt.ToolTipRole) or "")
+                   for i in range(self.session.count())]
+        if current != wanted:
+            # Signals blocked: repopulating fires currentIndexChanged, and redrawing the
+            # table from inside the refresh that filled this is a loop.
+            self.session.blockSignals(True)
+            self.session.clear()
+            for index, (label, value, detail) in enumerate(wanted):
+                self.session.addItem(label, value)
+                self.session.setItemData(index, detail, QtCore.Qt.ToolTipRole)
+            at = self.session.findData(chosen)
+            self.session.setCurrentIndex(at if at >= 0 else 0)
+            self.session.blockSignals(False)
+        self.session.setVisible(len(found) > 0)
+        if self.session.currentData() is not None and self.session.findData(chosen) < 0:
+            # The session being looked at is gone. Fall back rather than show its last table.
+            self._show_session(None)
+
+    @staticmethod
+    def _session_when(row: dict) -> str:
+        """When a session started, on the player's own clock.
+
+        LOCAL TIME, not the JST the Stats page buckets by. This answers "which of my
+        sittings", which is a wall-clock memory — 「昨晚那次」 — and a player in Taiwan who
+        mined at 23:30 would not recognise their own session under tomorrow's date. The Stats
+        page says JST where it matters and says so on the page; nothing here is a day bucket.
+        """
+        when = row["started_at"] or row["first"]
+        try:
+            moment = datetime.fromisoformat(when)
+        except ValueError:
+            return (when or "?")[:16]
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        return moment.astimezone().strftime("%m-%d %H:%M")
+
+    def _session_label(self, row: dict, names: dict) -> str:
+        """What the closed control says: when it was, and what came out of it.
+
+        Short deliberately — this sits on a row that already holds the dungeon picker and the
+        pickaxe count, and an entry that has to be elided is one a player cannot read without
+        opening the list. The rest is in `_session_detail`.
+        """
+        parts = [self._session_when(row)]
+        if row["chests"]:
+            parts.append(f"{row['chests']} {self.t('chest')}")
+        if row["veins"]:
+            parts.append(f"{row['veins']} {self.t('vein')}")
+        if not row["chests"] and not row["veins"]:
+            parts.append(self.t("nothing recorded"))
+        dungeon = names.get(row["dungeon_id"])
+        if dungeon:
+            parts.append(dungeon)
+        return "  ".join(parts)
+
+    def _session_detail(self, row: dict, names: dict) -> str:
+        """The rest of it, where a tooltip has the room the row does not."""
+        parts = [self._session_when(row), mmss(row["seconds"])]
+        dungeon = names.get(row["dungeon_id"])
+        if dungeon:
+            parts.append(dungeon)
+        parts.append(f"{row['lines']} {self.t('item lines')}")
+        return "   ".join(parts)
+
+    def _session_changed(self, _index: int) -> None:
+        self._show_session(self.session.currentData())
+
+    def _show_session(self, dive_id) -> None:
+        """Redraw the ledger for one session, or put the live one back.
+
+        READ-ONLY IN EVERY SENSE THAT MATTERS, with one exception that is the point of it:
+        the Delete button still appears on the same shaky readings, because looking back is
+        exactly when a player notices one. Nothing else here sends, uploads or changes a
+        record.
+        """
+        self.table.setRowCount(0)
+        self._deletable.clear()
+        # THE PICKAXE COUNT IS ABOUT THE DIVE YOU ARE ABOUT TO DO, so it has no business on
+        # screen while the ledger is showing one from last night — it is the number in your
+        # bag right now, and editing it against a session that has ended reads as editing
+        # that session. Hiding it also gives the picker the width the row does not have.
+        #
+        # Coming back asks `_refresh_mining` rather than simply showing them again: they are
+        # already hidden outside the one dungeon that has veins, and forcing them visible
+        # here would put a pickaxe count on a floor with nothing to mine.
+        if dive_id is not None:
+            for widget in (self.pickaxe_caption, self.pickaxes, self.pickaxe_label):
+                widget.setVisible(False)
+        else:
+            self._refresh_mining()
+        if dive_id is None:
+            spooled = self._still_spooled()
+            for at, kind, what, marker, event in list(self._live_rows):
+                self._add_row(at, kind, what, marker=marker, event=event, remember=False,
+                              spooled=spooled)
+            if not self._live_rows:
+                self._show_empty()
+            self._refresh_counters(getattr(self.worker, "stats", None) or {})
+            return
+
+        from .stats import events_of
+
+        # ONE read of the outbox for the whole replay, not one per row — see `_still_spooled`,
+        # whose own docstring promised this and did not get it.
+        spooled = self._still_spooled()
+        # JUST THE MARKER, not a tally. The picker's own entry already says how many chests
+        # and veins that session held, and printing the same two numbers again a hand's width
+        # to the left is the "two numbers that look like they should agree" problem the Stats
+        # headline had. What the line has to say here is that the ledger is not live.
+        self.counters.setText(self.t("looking back"))
+        events = events_of(records_path(), dive_id)
+        for event in events:
+            dive = event.get("dive") or {}
+            if event.get("provenance") == "marker":
+                # A marker carries no elapsed clock, so it is placed by when it happened.
+                self._add_row(self._at_of(event, dive), "",
+                              self.t("A pickaxe broke") if "pickaxe" in str(event.get("note"))
+                              else self.t("next dive"),
+                              marker=True, remember=False)
+                continue
+            mining = event.get("provenance") == "mining"
+            self._add_row(mmss(dive.get("elapsed_seconds", 0)),
+                          self.t("vein") if mining else self.t("chest"),
+                          self._describe(event), event=event, remember=False,
+                          spooled=spooled)
+        if not events:
+            self.empty.setText(self.t("Nothing was recorded in that session."))
+            self.records.setCurrentWidget(self.empty)
+        # TO THE TOP, not the bottom. `_add_row` scrolls down because a live ledger is read
+        # at its newest end; a session being looked back at is read from the start, and
+        # landing on the last row shows a table already half scrolled past.
+        self.table.scrollToTop()
+
+    @staticmethod
+    def _at_of(event: dict, dive: dict) -> str:
+        """A marker's place in the session, from the clock rather than from an elapsed field.
+
+        Markers do not carry `elapsed_seconds` — they are not openings — so this works it out
+        against the dive's own start. Blank when either end is missing, which is honest: an
+        empty cell says "not known" where 00:00 would say "at the very beginning".
+        """
+        start, when = dive.get("started_at"), event.get("occurred_at")
+        if not start or not when:
+            return ""
+        try:
+            began, happened = datetime.fromisoformat(start), datetime.fromisoformat(when)
+        except ValueError:
+            return ""
+        return mmss((happened - began).total_seconds())
+
+    def _offer_take_back(self, row: int, event: dict, spooled: set | None = None) -> None:
+        """Put a Delete button on this row, but only where the reading is shaky.
+
+        NOT ON EVERY ROW, and the restraint is the feature. A button beside every record is a
+        button that deletes good data, and the rows worth a second opinion are the ones the
+        client itself was unsure of — an inferred quantity, a name it could not place, a panel
+        it did not finish, junk that names another dungeon. Those the player can settle by
+        looking at their own screen, which is evidence nobody here will ever have.
+
+        An empty chest never gets one: it is a real observation and the WORST outcome, so
+        deleting those one shrug at a time would delete the bottom of the distribution and
+        inflate every rate the study is trying to measure. See removal.why_imprecise.
+        """
+        from .removal import why_imprecise
+
+        reasons = why_imprecise(event)
+        if not reasons:
+            return
+        # ASKED BEFORE THE BUTTON EXISTS, so a record whose window closed while the client
+        # was shut is never offered a take-back it cannot make — the ordinary case when
+        # looking back at a session from last night.
+        if not self._can_take_back(event, spooled):
+            return
+        why = "; ".join(self.t(reason) for reason in reasons)
+        button = QtWidgets.QPushButton(self.t("Delete"))
+        button.setObjectName("rowaction")
+        button.setCursor(QtCore.Qt.PointingHandCursor)
+        button.setProperty("why", why)
+        button.setToolTip(self._take_back_tip(event, why, spooled))
+        button.clicked.connect(lambda _=False, r=row, e=event: self._take_back(r, e))
+        self.table.setCellWidget(row, 3, button)
+        self._deletable.append((row, button, event))
+
+    # -- how long a take-back can still be made ------------------------------------
+    def _still_spooled(self) -> set:
+        """The event_ids that have not left this computer yet.
+
+        Read once per tick rather than per row: the spool is small, but this runs over every
+        button on screen and a file read each would be a file read each.
+        """
+        import json
+
+        path = spool_path()
+        if not path.exists():
+            return set()
+        out = set()
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                out.add(str(json.loads(line).get("event_id")))
+            except ValueError:
+                continue
+        return out
+
+    def _seconds_left(self, event: dict) -> float:
+        """How long the STUDY will still accept a take-back for this record.
+
+        Counted from `occurred_at`, where the server counts from when it received the row.
+        Those differ by the send delay and by however long the upload took, so this expires
+        SLIGHTLY EARLY — which is the only safe direction to be wrong in. A countdown that
+        outlived the server's window would offer a deletion the server then refuses, after
+        the player's own copy is already gone.
+        """
+        try:
+            moment = datetime.fromisoformat(event.get("occurred_at") or "")
+        except ValueError:
+            return 0.0
+        if moment.tzinfo is None:
+            moment = moment.replace(tzinfo=timezone.utc)
+        window = max(0, int(getattr(self.cfg, "removal_window_seconds", 0) or 0))
+        return window - (datetime.now(timezone.utc) - moment).total_seconds()
+
+    def _can_take_back(self, event: dict, spooled: set | None = None) -> bool:
+        """Whether the study would still honour a take-back for this record.
+
+        A record still in the OUTBOX has no deadline at all — deleting it costs one line
+        removed from a file and the study is never told — so it stays deletable for as long
+        as it sits there. With sharing off nothing ever drains, so nothing ever expires.
+        """
+        if str(event.get("event_id")) in (
+                self._still_spooled() if spooled is None else spooled):
+            return True
+        return self._seconds_left(event) > 0
+
+    def _take_back_tip(self, event: dict, why: str, spooled: set | None = None) -> str:
+        """What deleting this one would actually do. Two cases and no number in either.
+
+        NO COUNTDOWN ANYWHERE. A deadline ticking down beside a row is an urgency the player
+        did not ask for, on a decision that should be made by looking at their own screen
+        rather than at a clock. When the study will no longer take a record back its button
+        goes, which says the same thing without ever having nagged.
+        """
+        if str(event.get("event_id")) in (
+                self._still_spooled() if spooled is None else spooled):
+            return self.t("This one was not read cleanly: {why}. It has not been sent yet, "
+                          "so deleting it removes it here and the study is never told.",
+                          why=why)
+        return self.t("This one was not read cleanly: {why}. It is already at the study — "
+                      "deleting it asks them to remove their copy too.", why=why)
+
+    def _refresh_take_backs(self) -> None:
+        """Take away the buttons whose window has closed. Cheap, and it settles.
+
+        REMOVED, NOT HIDDEN. A cell widget is a persistent editor as far as the view is
+        concerned, and the view re-shows it whenever it lays the row out again — so
+        `setVisible(False)` lasts until the next scroll, which is the worst possible
+        lifetime for a control that must not be pressed.
+
+        A button that has gone leaves the list rather than being checked forever — both the
+        ones that expire and the ones `_take_back` has already replaced with a struck-through
+        label, since a timer holding a deleted Qt object is a crash rather than a stale one.
+        """
+        alive = []
+        spooled = self._still_spooled()
+        for row, button, event in self._deletable:
+            try:
+                if not self._can_take_back(event, spooled):
+                    self.table.removeCellWidget(row, 3)
+                    continue
+                button.setToolTip(self._take_back_tip(event, button.property("why") or "",
+                                                      spooled))
+            except RuntimeError:                 # the widget is gone; so is its row
+                continue
+            alive.append((row, button, event))
+        self._deletable = alive
+
+    def _take_back(self, row: int, event: dict) -> None:
+        """Remove this record. What that costs depends on whether it has been sent yet.
+
+        The two outcomes are said differently on purpose. Inside the send delay nothing ever
+        left the machine and the deletion is certain; outside it the study has the row and
+        the client is asking for it back, which the server may refuse once its own window has
+        closed. Telling a player the first thing when the second happened is the kind of
+        promise this program cannot make.
+        """
+        from .removal import remove_record
+
+        event_id = str(event.get("event_id") or "")
+        if not event_id:
+            return
+        result = remove_record(self.cfg, event_id)
+
+        # THE ROW STAYS, struck through. Removing it would renumber every row after it —
+        # which is what the other buttons' captured indexes point at — and, less mechanically,
+        # a ledger that silently loses a line is a ledger a player cannot audit. They pressed
+        # a button; they should be able to see what it did.
+        self.table.removeCellWidget(row, 3)
+        struck = QtWidgets.QTableWidgetItem(self.t("deleted"))
+        struck.setForeground(QtGui.QColor(theme.MUTED))
+        self.table.setItem(row, 3, struck)
+        body = self.table.item(row, 2)
+        if body is not None:
+            body.setForeground(QtGui.QColor(theme.MUTED))
+            font = body.font()
+            font.setStrikeOut(True)
+            body.setFont(font)
+
+        # The live counters are what THIS session recorded, so they only move for a row of
+        # it. Deleting from a session recorded last night must not decrement the tally of
+        # the one running now — and while looking back there may not be one at all.
+        if self.session.currentData() is None:
+            self._live_rows = [r for r in self._live_rows
+                               if (r[4] or {}).get("event_id") != event.get("event_id")]
+            if event.get("provenance") == "mining":
+                self.mined = max(0, self.mined - 1)
+            else:
+                self.chests = max(0, self.chests - 1)
+        # A session can lose its last record this way, and an entry pointing at one with
+        # nothing left in it draws an empty table for no stated reason.
+        self._refresh_sessions()
+
+        if result["unsent"]:
+            self._say(self.t("Deleted. It had not been sent, so the study was never told "
+                             "about it."))
+        elif result["queued"]:
+            self._say(self.t("Deleted here. Asking the study to remove its copy…"))
+            self._drain_deletes()
+        else:
+            self._say(self.t("Deleted from your own records."))
+        self._refresh_spool()
+
+    def _drain_deletes(self) -> None:
+        """Send whatever take-backs are queued. Runs whether or not sharing is on."""
+        running = getattr(self, "_delete_worker", None)
+        if running is not None and running.isRunning():
+            return
+        worker = DeleteWorker(self.cfg, self)
+        worker.done.connect(self._deletes_drained)
+        # Kept quiet. It retries on its own and at the next launch, and the row on screen
+        # already says the player's own copy is gone.
+        worker.failed.connect(
+            lambda m: log.warning("wddrop: could not send a take-back: %s", m))
+        self._delete_worker = worker
+        worker.start()
+
+    def _deletes_drained(self, result: dict) -> None:
+        """Only the refusal is worth interrupting for.
+
+        A take-back that worked needs no announcement — the row already says so. One the
+        server would not accept does: the record is still in the study, the player believes
+        it is not, and nothing later will correct that impression.
+        """
+        if result.get("expired"):
+            self._say(self.t("{n} record(s) could not be removed from the study — too much "
+                             "time had passed. They are gone from this computer.",
+                             n=result["expired"]), "attention")
+
+    def _describe(self, event: dict) -> str:
+        """One record as the ledger's third column, live or replayed.
+
+        Shared so that looking back at a session shows exactly what watching it showed. Two
+        renderings of one record that differ in any detail are a reason to doubt both.
+
+        Named in the language the WINDOW is in, not the one the GAME is in. The client asks
+        for a Japanese game, so every reading is Japanese — and this line is what a player
+        watches while they dive, so it was the one place the interface answered in a language
+        they had not chosen.
+        """
+        names = self._item_names()
+        items = " · ".join(
+            f"{names.display(c)} ×{c['quantity']}" + ("?" if c.get("qty_unknown") else "")
+            + _frame_note(c)
+            for c in event.get("contents", []))
+        unread = (event.get("qc") or {}).get("panel_lines_unread")
+        if unread:
+            items += f"   [{unread} unread]"
+        return items or "(nothing)"
 
     def _chest(self, event: dict) -> None:
         dive = event.get("dive") or {}
         mining = event.get("provenance") == "mining"
         self.mined += mining
         self.chests += not mining
-        # Named in the language the WINDOW is in, not the one the GAME is in. The client asks
-        # for a Japanese game, so every reading is Japanese — and this line is what a player
-        # watches while they dive, so it was the one place the interface answered in a
-        # language they had not chosen. The stats page already went through the table; this
-        # printed `item_name` straight from the record.
-        names = self._item_names()
-        items = " · ".join(
-            f"{names.display(c)} ×{c['quantity']}" + ("?" if c.get("qty_unknown") else "")
-            + _frame_note(c)
-            for c in event.get("contents", []))
         qc = event.get("qc") or {}
-        unread = qc.get("panel_lines_unread")
-        if unread:
-            items += f"   [{unread} unread]"
-        row = self._add_row(mmss(dive.get("elapsed_seconds", 0)),
-                            self.t("vein") if mining else self.t("chest"),
-                            items or "(nothing)")
+        self._add_row(mmss(dive.get("elapsed_seconds", 0)),
+                      self.t("vein") if mining else self.t("chest"),
+                      self._describe(event), event=event)
         if qc.get("label_conflict") and self._hints is not None:
-            self.table.item(row, 2).setForeground(QtGui.QColor(theme.EMBER))
             names = self._hints.conflict_names(dive.get("dungeon_id"), qc)
             if names and all(names):
                 self._say(self.t("You chose {chosen}, but this chest's junk comes from "
@@ -3082,6 +3754,19 @@ class MainWindow(QtWidgets.QMainWindow):
                     and self._waiting() >= self.cfg.send_batch_size):
                 self._upload(quiet=True)
 
+    def _dive_id(self) -> str | None:
+        """The session a marker belongs to, while one is running.
+
+        Markers were written with a dungeon and no dive_id, so nothing could say WHICH
+        session a broken pickaxe happened in — which is fine for a count and useless for
+        anything that shows one session at a time. Found by replaying a session in the
+        picker: the openings came back and the pickaxes did not.
+
+        Records already on disk cannot be repaired; they name no session and never will.
+        """
+        runner = getattr(self.worker, "runner", None) if self.worker is not None else None
+        return getattr(runner, "dive_id", None)
+
     def _mark_dive(self) -> None:
         """A note to yourself, kept out of the data that is sent."""
         self._add_row(self._elapsed(), "", self.t("next dive"), marker=True)
@@ -3089,7 +3774,8 @@ class MainWindow(QtWidgets.QMainWindow):
             "event_id": f"marker-{uuid4()}",
             "occurred_at": datetime.now(timezone.utc).isoformat(),
             "provenance": "marker", "note": self.t("next dive"), "contents": [],
-            "dive": {"dungeon_id": self.dungeon.currentData(),
+            "dive": {"dive_id": self._dive_id(),
+                     "dungeon_id": self.dungeon.currentData(),
                      "elapsed_seconds": int((datetime.now(timezone.utc)
                                              - (self._started_at or datetime.now(timezone.utc))
                                              ).total_seconds())},
@@ -3109,7 +3795,9 @@ class MainWindow(QtWidgets.QMainWindow):
             "event_id": f"marker-{uuid4()}",
             "occurred_at": datetime.now(timezone.utc).isoformat(),
             "provenance": "marker", "note": "pickaxe broke", "contents": [],
-            "dive": {"dungeon_id": self.dungeon.currentData()},
+            # WHICH SESSION, not just which dungeon — see `_dive_id`.
+            "dive": {"dive_id": self._dive_id(),
+                     "dungeon_id": self.dungeon.currentData()},
         }
         self.markers.append(marker)
         # To the player's own file as well, not only to this window's list. A pickaxe broken
@@ -3150,17 +3838,7 @@ class MainWindow(QtWidgets.QMainWindow):
         stats = getattr(self.worker, "stats", None) or {}
         if not stats:
             return
-        # THE FRAME COUNT IS OURS, NOT THE PLAYER'S. It answers "is the loop sampling",
-        # which is a question about this program rather than about their dive, and it sits
-        # in the one line the record page uses to say whether anything is working.
-        #
-        # Gated on the CHECKOUT, not on `in_development`: the released exe carries the
-        # development marker on purpose, so that gate showed this to everyone who downloaded
-        # it — reported, reasonably, as a debug number shipping to players.
-        counted = (f"{stats.get('frames', 0)} frames   " if in_checkout() else "")
-        self.counters.setText(
-            f"{self._elapsed()}   {counted}"
-            f"{self.chests} {self.t('chest')}   {self.mined} {self.t('vein')}")
+        self._refresh_counters(stats)
         capped = stats.get("record_capped")
         if capped and not getattr(self, "_said_capped", False):
             self._said_capped = True
@@ -3174,15 +3852,64 @@ class MainWindow(QtWidgets.QMainWindow):
         # with the client and was tested against real recordings. The runner still logs the
         # same observation for a bug report; it is not worth interrupting a dive for.
 
-    def _finished(self, stats: dict) -> None:
+    def _refresh_counters(self, stats: dict) -> None:
+        """The live line on the record page.
+
+        SEPARATE FROM `_refresh_stats` because the end of a session has to redraw it and
+        cannot go through that path: the timer has stopped by then, and the whole reason
+        this exists is that "paused" was still sitting there after Stop — the last thing the
+        timer drew before it was switched off, left on screen describing a session that had
+        already ended.
+        """
+        # THE FRAME COUNT IS OURS, NOT THE PLAYER'S. It answers "is the loop sampling",
+        # which is a question about this program rather than about their dive, and it sits
+        # in the one line the record page uses to say whether anything is working.
+        #
+        # Gated on the CHECKOUT, not on `in_development`: the released exe carries the
+        # development marker on purpose, so that gate showed this to everyone who downloaded
+        # it — reported, reasonably, as a debug number shipping to players.
+        counted = (f"{stats.get('frames', 0)} frames   " if in_checkout() else "")
+        # PAUSED SAYS SO HERE TOO. A paused session looks exactly like a running one from
+        # this line — the numbers simply stop moving — and a number that has stopped with no
+        # reason beside it has already been reported once as broken detection.
+        #
+        # READ FROM THE WINDOW, NOT FROM THE RUNNER. The runner outlives the session that
+        # owned it and goes on reporting `paused` forever, so a session paused and then
+        # stopped kept the word on screen with nothing running behind it. The window owns
+        # this flag and clears it where the session ends, which is the only place that can
+        # know it has.
+        state = f"{self.t('paused')}   " if self._paused else ""
+        self.counters.setText(
+            f"{state}{self._elapsed()}   {counted}"
+            f"{self.chests} {self.t('chest')}   {self.mined} {self.t('vein')}")
+
+    def _stopped_running(self) -> None:
+        """Put the record page back to "nothing is running", from either way out of a session.
+
+        Both exits have to do the same six things, and `_failed` had drifted: it left the
+        primary button styled as a live session and, once pause existed, left the word
+        `paused` on the counters. The end of a session is one state, so it is written once.
+        """
         self.timer.stop()
+        self._paused = False
         self.start.setText(self.t("Start recording"))
         self.start.setProperty("running", "false")
         self.start.style().unpolish(self.start)
         self.start.style().polish(self.start)
         self.start.setEnabled(True)
+        self.stop_button.setVisible(False)
+        self.stop_button.setEnabled(True)
         self.mark.setEnabled(False)
         self._set_setup_enabled(True)
+        # The live line one last time, with the pause gone. The timer that normally draws it
+        # has just been stopped, so without this the last frame it drew — which for a player
+        # who paused before stopping says `paused` — is what stays on screen.
+        stats = getattr(self.worker, "stats", None) or {}
+        if stats:
+            self._refresh_counters(stats)
+
+    def _finished(self, stats: dict) -> None:
+        self._stopped_running()
         self._say(self.t("Stopped. {chests} {chest}, {mined} {vein}.",
                          chests=self.chests, chest=self.t("chest"),
                          mined=self.mined, vein=self.t("vein")))
@@ -3195,11 +3922,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._upload(quiet=True)
 
     def _failed(self, message: str) -> None:
-        self.timer.stop()
-        self.start.setText(self.t("Start recording"))
-        self.start.setEnabled(True)
-        self.mark.setEnabled(False)
-        self._set_setup_enabled(True)
+        self._stopped_running()
         self._say(message, "attention")
 
     def _upload(self, quiet: bool = False) -> None:
@@ -3216,11 +3939,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.upload.setEnabled(False)
         self.uploader = UploadWorker(self.cfg, self)
         self.uploader.done.connect(lambda r: (
-            self._say_blocked(r["blocked"], r["remaining"]) if r.get("blocked") else (
-                None if quiet else self._say(
-                    self.t("Sent {sent}. {waiting} still waiting.",
-                           sent=r["uploaded"], waiting=r["remaining"]))),
-            self._refresh_spool(), self._upload_deferred(quiet)))
+            self._say_blocked(r["blocked"], r["remaining"]) if r.get("blocked")
+            else (None if quiet else self._say_uploaded(r)),
+            self._learn_removal_window(r), self._refresh_spool(),
+            self._retry_when_held(r, quiet), self._upload_deferred(quiet)))
         self.uploader.failed.connect(
             lambda m: (self._say(self.t("Could not send: {why}. It stays on this computer "
                                         "and will be retried.", why=m), "attention"),
@@ -3245,6 +3967,80 @@ class MainWindow(QtWidgets.QMainWindow):
             "This version can no longer send records — update to {version}. Nothing was "
             "lost: {waiting} record(s) are kept here and will send once you update.",
             version=latest, waiting=waiting), "attention")
+
+    def _ask_policy(self) -> None:
+        """One GET at launch, so the take-back buttons count against the real deadline."""
+        running = getattr(self, "_policy_worker", None)
+        if running is not None and running.isRunning():
+            return
+        worker = PolicyWorker(self.cfg, self)
+        worker.done.connect(self._learn_removal_window)
+        self._policy_worker = worker
+        worker.start()
+
+    def _learn_removal_window(self, result: dict) -> None:
+        """Adopt the server's own take-back deadline, which the Delete buttons count against.
+
+        Saved because it has to survive a restart: a countdown that resets to the client's
+        default every launch would be the client's opinion of somebody else's rule, and the
+        one direction that matters — offering a deletion the server will refuse — is the one
+        a stale guess gets wrong.
+        """
+        window = result.get("removal_window_seconds")
+        if not isinstance(window, int) or window <= 0:
+            return
+        if window == self.cfg.removal_window_seconds:
+            return
+        self.cfg.removal_window_seconds = window
+        self.cfg.save()
+        # REDRAWN, not just re-ticked. A window that has GROWN brings buttons back, and
+        # `_refresh_take_backs` can only take them away — it walks the ones already on
+        # screen, and a row whose button was never built is not on that list. Learning
+        # 24 hours where the client had believed 1 has to rebuild the ledger to show it.
+        self._show_session(self.session.currentData())
+
+    def _say_uploaded(self, result: dict) -> None:
+        """What the drain did — and why a number may not have moved.
+
+        A player who presses Upload inside the send delay is told "Sent 0" with records
+        plainly waiting, which reads as a failure of the button they just pressed. The held
+        count is the other half of that sentence, and it is the half that explains itself.
+        """
+        said = self.t("Sent {sent}. {waiting} still waiting.",
+                      sent=result["uploaded"], waiting=result["remaining"])
+        if result.get("held"):
+            said += "  " + self.t("{n} of those can still be deleted, so they have not "
+                                  "been sent yet.", n=result["held"])
+        self._say(said)
+
+    def _retry_when_held(self, result: dict, quiet: bool = True) -> None:
+        """Come back for the records that were still inside their send delay.
+
+        A held record is not a failure and is not lost — it is in the outbox and the next
+        drain takes it — but without this, "the next drain" is whenever the player records
+        again, which for the last chest of a session may be never. So the drain is scheduled
+        for just after the delay runs out, rather than polled for.
+
+        In manual mode too, when the player PRESSED Upload. "Send when I press Upload" is an
+        instruction to send, and honouring it only for the records that happen to be more
+        than twenty seconds old would mean pressing the button twice.
+
+        One timer at a time. Every drain of a live session reports something held, and a
+        timer per drain would arrive as a burst of requests that a single one covers.
+        """
+        if not result.get("held") or getattr(self, "_held_retry", False):
+            return
+        asked_for = self.cfg.send_mode in AUTOMATIC_MODES or not quiet
+        if not (self.cfg.share_uploads and asked_for):
+            return
+        self._held_retry = True
+        delay = max(0, int(getattr(self.cfg, "send_delay_seconds", 0) or 0))
+
+        def again() -> None:
+            self._held_retry = False
+            self._upload(quiet=quiet)
+
+        QtCore.QTimer.singleShot((delay + 1) * 1000, again)
 
     def _upload_deferred(self, quiet: bool) -> None:
         """Run the request that arrived while the last upload was still in the air.
@@ -3383,7 +4179,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # The update threads too. They own a five-second HTTP timeout, and a QThread still
         # running when its parent is destroyed takes the process with it — which is a crash
         # on closing the window, for the least important thing this program does.
-        for name in ("_update_worker", "_manual_update_worker"):
+        for name in ("_update_worker", "_manual_update_worker", "_delete_worker", "_policy_worker"):
             worker = getattr(self, name, None)
             if worker is not None and worker.isRunning():
                 worker.wait(6000)

@@ -281,3 +281,95 @@ def test_the_days_offered_do_not_change_with_the_source(tmp_path):
     ])
     days = [[r["day"] for r in summarise(path, source=s)["days"]] for s in (None, "chest", "vein")]
     assert days[0] == days[1] == days[2] == ["2026-08-11", "2026-08-10"]
+
+
+# -- one session at a time ---------------------------------------------------------------
+
+
+def _a_dive(dive_id: str, started: str, rows) -> list[dict]:
+    """`rows` is (provenance, occurred_at, elapsed, lines)."""
+    return [{"event_id": f"{dive_id}-{i}", "provenance": p, "occurred_at": when,
+             "contents": [{"item_name": f"x{n}", "quantity": 1} for n in range(lines)],
+             "dive": {"dive_id": dive_id, "started_at": started, "elapsed_seconds": elapsed,
+                      "dungeon_id": 7015, "stop_reason": "user_stop"}}
+            for i, (p, when, elapsed, lines) in enumerate(rows)]
+
+
+def test_a_session_is_a_dive_id_and_nothing_has_to_be_inferred(tmp_path):
+    """The tracker mints one in `start_session` and drops it in `stop_session`, so one id is
+    exactly one press of Start to one press of Stop. Reconstructing sittings from gaps
+    between timestamps would be a guess, and this is not one."""
+    from wddrop_client.stats import sessions
+
+    path = tmp_path / "records.jsonl"
+    rows = (_a_dive("d1", "2026-08-17T03:55:00+00:00", [
+                ("chest_direct", "2026-08-17T03:57:00+00:00", 120, 2),
+                ("mining", "2026-08-17T04:02:00+00:00", 420, 3)])
+            + _a_dive("d2", "2026-08-17T06:03:00+00:00", [
+                ("mining", "2026-08-17T06:05:00+00:00", 120, 1)]))
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    found = sessions(path)
+    assert [s["dive_id"] for s in found] == ["d2", "d1"], "newest first"
+    first = found[1]
+    assert (first["openings"], first["chests"], first["veins"], first["lines"]) == (2, 1, 1, 5)
+    assert first["dungeon_id"] == 7015 and first["stop_reason"] == "user_stop"
+    # HOW LONG IT RAN comes from the largest elapsed_seconds, not from last minus first:
+    # those agree only when the last thing that happened was an opening.
+    assert first["seconds"] == 420
+
+
+def test_a_marker_with_no_dive_id_belongs_to_no_session(tmp_path):
+    """Every pickaxe break recorded before 2026-08-17 was written with a dungeon and no
+    dive_id, so nothing can place it. It must not become a session of its own, and it must
+    not silently join the one before it."""
+    from wddrop_client.stats import sessions
+
+    path = tmp_path / "records.jsonl"
+    rows = _a_dive("d1", "2026-08-17T03:55:00+00:00", [
+        ("chest_direct", "2026-08-17T03:57:00+00:00", 120, 2)])
+    rows.append({"event_id": "marker-old", "provenance": "marker", "note": "pickaxe broke",
+                 "occurred_at": "2026-08-17T03:58:00+00:00", "contents": [],
+                 "dive": {"dungeon_id": 7015}})
+    rows.append({"event_id": "marker-new", "provenance": "marker", "note": "pickaxe broke",
+                 "occurred_at": "2026-08-17T03:59:00+00:00", "contents": [],
+                 "dive": {"dive_id": "d1", "dungeon_id": 7015}})
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    found = sessions(path)
+    assert len(found) == 1, "a placeless marker invented a session"
+    assert found[0]["markers"] == 1, "only the one carrying an id can be placed"
+    assert found[0]["openings"] == 1, "a marker is not an opening"
+
+
+def test_one_sessions_records_come_back_in_the_order_they_happened(tmp_path):
+    """Sorted by `occurred_at` rather than trusted to the file, which is append order —
+    close enough to agree today and not a thing to rely on."""
+    from wddrop_client.stats import events_of
+
+    path = tmp_path / "records.jsonl"
+    rows = (_a_dive("d1", "2026-08-17T03:55:00+00:00", [
+                ("mining", "2026-08-17T04:02:00+00:00", 420, 1),
+                ("chest_direct", "2026-08-17T03:57:00+00:00", 120, 1)])
+            + _a_dive("d2", "2026-08-17T06:03:00+00:00", [
+                ("mining", "2026-08-17T06:05:00+00:00", 120, 1)]))
+    path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+    got = events_of(path, "d1")
+    assert [e["occurred_at"] for e in got] == ["2026-08-17T03:57:00+00:00",
+                                               "2026-08-17T04:02:00+00:00"]
+    assert events_of(path, "nope") == [] and events_of(path, "") == []
+
+
+def test_a_resent_record_is_not_counted_twice_in_a_session(tmp_path):
+    """Nothing writes a duplicate today. Every other reader of this file is written so a
+    future one cannot double-count, and this is not the place to be the exception."""
+    from wddrop_client.stats import events_of, sessions
+
+    path = tmp_path / "records.jsonl"
+    rows = _a_dive("d1", "2026-08-17T03:55:00+00:00", [
+        ("chest_direct", "2026-08-17T03:57:00+00:00", 120, 2)])
+    path.write_text("\n".join(json.dumps(r) for r in rows + rows) + "\n", encoding="utf-8")
+
+    assert sessions(path)[0]["openings"] == 1
+    assert len(events_of(path, "d1")) == 1

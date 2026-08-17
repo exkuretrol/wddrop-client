@@ -206,3 +206,75 @@ def test_reaching_the_frame_cap_is_reported_not_just_logged(tmp_path):
 
     assert runner.stats["record_capped"] == 2
     assert len(list(tmp_path.rglob("*.png"))) == 2, "the cap is a stop, not a warning"
+
+
+# -- pausing, which is not a short stop -------------------------------------------------
+#
+# Stopping ends the dive, and the dive is what `elapsed_seconds` is measured against — so a
+# player who stops to restock and starts again has cut one farming run into two, which is
+# the exact shape the study is looking for in the data, put there by the interface. Pause
+# keeps the dive and simply stops reading.
+
+
+def test_a_paused_loop_reads_nothing_but_keeps_pulling_frames():
+    """Pulling continues on purpose. The source owns its own clock and its own buffers, so
+    abandoning the generator to sleep would mean resuming into whatever a live capture had
+    piled up while nobody was looking."""
+    runner = make_runner()
+    runner.pause()
+    source = Frames(count=40)
+
+    stats = runner.run(source, dungeon_id=7015)
+
+    assert source.pulled == 40, "a paused loop stopped consuming the source"
+    assert stats["paused_frames"] == 40
+    assert stats["frames"] == 40 and stats["hud_present"] == 0
+    assert stats["recognised"] == 0, "a paused loop read the screen"
+
+
+def test_stop_works_while_paused():
+    """The stop flag is checked BEFORE the pause flag, so the button does not need the
+    session resumed first — which a player pressing Stop on a paused session would never
+    think to do."""
+    runner = make_runner()
+    runner.pause()
+    source = Frames(on_frame=lambda s: runner.stop("user_stop") if s.pulled == 5 else None)
+
+    runner.run(source, dungeon_id=7015)
+
+    assert runner.stop_reason == "user_stop"
+    assert source.pulled == 5
+
+
+def test_a_long_pause_does_not_trip_the_idle_timeout():
+    """Otherwise a break longer than the timeout ends the session silently, and the player
+    comes back to a client that says it is recording and is not."""
+    runner = make_runner()
+    runner.idle_timeout = 2.0
+    runner.pause()
+    # 4 fps over 200 frames is 50 seconds of frame time, far past the timeout.
+    stats = runner.run(Frames(count=200), dungeon_id=7015)
+
+    assert runner.stop_reason != "idle_timeout"
+    assert stats["paused_frames"] == 200
+
+
+def test_the_time_spent_paused_travels_with_the_records_rather_than_being_subtracted():
+    """`elapsed_seconds` is the study's independent variable and its meaning — wall time
+    since entering — must not quietly change under data already collected. So the pause is
+    reported beside it in QC and the analysis does the subtraction itself, on evidence."""
+    runner = make_runner()
+
+    def toggle(source):
+        if source.pulled == 4:
+            runner.pause()
+        elif source.pulled == 24:               # 20 frames at 4 fps = 5 seconds
+            runner.resume()
+
+    runner.run(Frames(count=30, on_frame=toggle), dungeon_id=7015)
+
+    assert runner.paused_seconds == pytest.approx(5.0, abs=0.5)
+    assert runner._pause_qc() == {"paused_seconds": 5}
+    # Below a second it is not worth a QC key: every session would then carry a
+    # `paused_seconds: 0` that says nothing.
+    assert make_runner()._pause_qc() == {}

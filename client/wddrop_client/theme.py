@@ -374,6 +374,19 @@ def stylesheet() -> str:
     QPushButton#primary:hover {{ background: {RULE}; }}
     QPushButton#primary:disabled {{ color: {MUTED}; border: 1px solid {RULE}; }}
     QPushButton#primary[running="true"] {{ border: 1px solid {EMBER}; color: {EMBER}; }}
+    /* A button that lives INSIDE a table row, where the ordinary one does not fit. At the
+       padding above its size hint is taller than a row, so Qt clipped it to a grey sliver
+       with the label cut off entirely — a control that looked like a rendering fault rather
+       than something to press. Smaller, and quiet until the pointer is on it: deleting a
+       record is not an action to advertise, only one to make available. */
+    QPushButton#rowaction {{
+        background: transparent;
+        border: 1px solid {RULE};
+        padding: 1px 10px;
+        font-size: 12px;
+        color: {MUTED};
+    }}
+    QPushButton#rowaction:hover {{ color: {EMBER}; border: 1px solid {EMBER}; }}
 
     QTableWidget {{
         background: {PITCH};

@@ -149,19 +149,31 @@ class ItemNames:
         return row.get("item_name") or row.get("equipment_name") or row.get("item") or "?"
 
 
-# Two groups, and only two: MONEY and THINGS.
+# Two groups, and only two: WHAT YOU CASH IN, and WHAT YOU KEEP.
 #
-# The game's own `Item::*` types are no use for this. There are 44 of them, they say what an
-# item is FOR rather than what it is, and they group things nobody would group:
-# `Item::RelicEquipmentMaterial` holds the coins and banknotes beside 「〜の証」 proofs and
-# 「〜の欠片」 weapon shards, because all three are spent on relic equipment.
+# It began as MONEY and THINGS, and the game's own `Item::*` types were no use for that.
+# There are 44 of them, they say what an item is FOR rather than what it is, and they group
+# things nobody would group: `Item::RelicEquipmentMaterial` holds the coins and banknotes
+# beside 「〜の証」 proofs and 「〜の欠片」 weapon shards, because all three are spent on relic
+# equipment. So 「ランペール金貨」 and 「10,000バイン紙幣」 stay out — 貨 ending a name is not
+# evidence, and those are things a chest gives you and you spend at a counter.
 #
-# It is tempting to read the coins as money — 貨 ends every one of them, 紙幣 every note —
-# and that was tried and is wrong. 「ランペール金貨」 and 「10,000バイン紙幣」 are things a chest
-# gives you and you spend at a counter, no different from a shard. The wallet holds two
-# things: ゴールド and Gil.
+# ONE type does say it, and it is the one this now uses. `Item::SaleOnly` means an item whose
+# only use is to be sold; it is not loot you play with, it is loot you convert. Grouping it
+# with the money makes the two lists answer two different questions — the Items ranking is
+# what a dive actually gave you, and this is what it cashed out to — where a single ranking
+# put 582 pebbles above everything a player opened a chest for.
+#
+# THE COST, STATED: on the vein view that moves 透明な小石 and the 蒼雫 family, which are what
+# a miner is farming, out of the Items ranking and under this heading. Decided that way
+# deliberately; ore IS the thing you sell.
 CURRENCY = "currency"
 ITEM = "item"
+
+# The one type. Read from the vocabulary rather than listed here, for the reason the server
+# joins `item_reference` rather than copying a type onto every row: it is the game's own fact
+# about an id, it changes between versions, and a copy cannot be corrected.
+SALE_ONLY = "Item::SaleOnly"
 
 # BY ID, NEVER BY NAME. The window speaks six languages and the id is the only spelling that
 # does not move: 1 is ゴールド, 金幣, Gold and 골드 depending on who is looking, and a name
@@ -179,11 +191,43 @@ class ItemCategories:
     Resolved at display time rather than stamped onto a record: the grouping is our word for
     the thing and not an observation, so a record made last month moves if the wording
     changes. Nothing here reaches the wire.
+
+    Built with `load()` where the vocabulary is reachable. Constructed bare it still knows the
+    two currencies, so a build that cannot find its vocabulary groups money correctly and
+    leaves everything else under Items — which is the previous behaviour, and the right way to
+    degrade: the alternative is a page that silently reshuffles depending on whether a file
+    was found.
     """
+
+    def __init__(self, sale_only: frozenset | set | None = None):
+        self._sale_only = frozenset(sale_only or ())
+
+    @classmethod
+    def load(cls, path) -> "ItemCategories":
+        """The sale-only ids, out of the same vocabulary the recogniser matched against.
+
+        Read as plain JSON rather than through `Vocabulary`: this runs on the Stats page, and
+        pulling in the recogniser's module to answer a grouping question would load the whole
+        OCR stack to draw a table.
+
+        Never raises. A missing or unreadable vocabulary gives the bare object above.
+        """
+        if not path:
+            return cls()
+        try:
+            raw = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            log.warning("wddrop: could not read %s for item grouping", path)
+            return cls()
+        return cls({int(row["id"]) for row in raw.get("items", [])
+                    if row.get("type") == SALE_ONLY and row.get("id") is not None})
 
     def of(self, row: dict) -> str:
         item_id = row.get("item_id")
-        if item_id is not None and int(item_id) in CURRENCY_IDS:
+        if item_id is None:
+            return ITEM
+        item_id = int(item_id)
+        if item_id in CURRENCY_IDS or item_id in self._sale_only:
             return CURRENCY
         return ITEM
 
@@ -326,7 +370,9 @@ def droppable(entries) -> list:
 #   Item::EquipmentReinforceMaterial   the five iron ores — all five have been mined
 #   Item::EquipmentSubEffectChange     ウロボロス鉱石 (mined), the two 全変造石, and the
 #                                      変造石/精錬石 families
-#   Item::SaleOnly                     透明な小石 (mined) and the four regional ore families
+#   Item::SaleOnly                     透明な小石 (mined) and the ore families a vein here
+#                                      produces — see NOT_FROM_A_VEIN_IDS for the eleven
+#                                      rows in the same id block that it does not
 #
 FROM_A_VEIN = frozenset({
     "Item::EquipmentReinforceMaterial",
@@ -351,6 +397,28 @@ ORE_ID_BLOCKS = (
 )
 
 
+# BEING ORE IS NOT THE SAME QUESTION AS COMING OUT OF A VEIN. The id blocks above separate
+# ore from keepsakes; which ore a vein actually PRODUCES is a fact about the drop tables,
+# which are not in the vocabulary. So these eleven are excluded by the project owner's
+# judgement — the same authority `NOT_FROM_A_DUNGEON` rests on, and for the same reason.
+#
+# Two things a reader can check here without the tables. The first three carry
+# `item_icon_cash_material` rather than any of the four ore icon families — they are the
+# coin-like exchange materials, not stones. And none of the eleven appears in a single one of
+# the 128 recorded swings in `tests/truth`, where 透明な小石 and the 蒼雫 family do.
+#
+# BEING WRONG HERE IS NOT FREE, exactly as it is not for NOT_FROM_A_DUNGEON: an excluded name
+# cannot be read at all. A line that IS one of these is refused, or matched to the nearest
+# name still in the pool and recorded as that — the wrong name does not fail, it wins.
+NOT_FROM_A_VEIN_IDS = frozenset({
+    200000090,                                     # 錆びついた古銭 ┐ the coin-like exchange
+    200000110,                                     # 貝貨           │ materials, on
+    200000120,                                     # 砕けた徽章      ┘ `cash_material`
+    200000130, 200000140, 200000150, 200000160,    # the 紅焔 family
+    200000170, 200000180, 200000190, 200000200,    # the 雪光 family
+})
+
+
 def _is_ore_id(item_id) -> bool:
     if item_id is None:
         return False
@@ -360,7 +428,7 @@ def _is_ore_id(item_id) -> bool:
 def from_a_vein(entries) -> list:
     """The names the mining panel may say, in the order given, deduplicated.
 
-    Same input as `droppable` — anything with `.name`, `.item_type`, `.item_id`. Returns 247
+    Same input as `droppable` — anything with `.name`, `.item_type`, `.item_id`. Returns 236
     of the 2,384 the panel used to be scored against.
     """
     out, seen = [], set()
@@ -370,6 +438,11 @@ def from_a_vein(entries) -> list:
         if not name or name in seen or kind not in FROM_A_VEIN:
             continue
         if kind == "Item::SaleOnly" and not _is_ore_id(getattr(entry, "item_id", None)):
+            continue
+        # Unconditional, not SaleOnly-only: an id is the game's own identity for one thing,
+        # so a rule keyed on it does not need to be told which type it was reached through.
+        item_id = getattr(entry, "item_id", None)
+        if item_id is not None and int(item_id) in NOT_FROM_A_VEIN_IDS:
             continue
         seen.add(name)
         out.append(name)

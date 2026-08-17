@@ -28,7 +28,7 @@ APP_NAME = "wddrop"
 # the build that is SENDING. The release tag must say the same thing — CI refuses a tag that
 # disagrees, because a client that under-reports itself would be refused after the fix that
 # made it acceptable, and one that over-reports would be admitted before it.
-CLIENT_VERSION = "0.8.0"
+CLIENT_VERSION = "0.9.0"
 
 
 def config_dir() -> Path:
@@ -298,6 +298,19 @@ def closes_path() -> Path:
     return config_dir() / "closes.jsonl"
 
 
+def deletes_path() -> Path:
+    """Append-only JSONL of records the player asked to take back, already uploaded.
+
+    Queued to disk rather than sent where the button was pressed, for the same reason dive
+    endings are: the request can fail, and a deletion that evaporates because the wifi
+    blinked is one the player believes they made. See `uploader.record_delete`.
+
+    A record still IN the spool never reaches this file — it is simply dropped before it is
+    ever sent, which is the whole point of `send_delay_seconds`.
+    """
+    return config_dir() / "deletes.jsonl"
+
+
 # How a recorded event reaches the server, once sharing is on.
 SEND_EACH = "each"        # as it happens — the spool is drained after every record
 SEND_BATCH = "batch"      # once a handful have accumulated
@@ -315,6 +328,33 @@ SEND_MANUAL = "manual"    # when the player presses Upload
 SEND_BATCH_SIZE = 10
 
 AUTOMATIC_MODES = (SEND_EACH, SEND_BATCH)
+
+# HOW LONG A RECORD SITS ON DISK BEFORE IT IS ALLOWED TO LEAVE.
+#
+# It exists for the delete button, and it is what makes that button mean two different
+# things. Inside this window a record has not been sent, so taking it back costs one line
+# removed from a file and the server is never told anything. Outside it, the record is at the
+# study and taking it back is a request the server may refuse — see the removal window in
+# `wddrop_server`. One is free and certain; the other is neither, so the client should spend
+# the free one first.
+#
+# Twenty seconds, from the measured cadence: the median gap between records in a real session
+# is 20s, so this is about one record's worth of hesitation. Long enough to read the line that
+# just appeared and press a button; short enough that a player who never presses it does not
+# notice a delay at all, because the spool is drained by the NEXT record anyway.
+#
+# It applies in every send mode, including manual: the delay is a property of the record, not
+# of how the player chose to send. Zero disables it.
+SEND_DELAY_SECONDS = 20
+
+# HOW LONG AFTER SENDING A RECORD CAN STILL BE TAKEN BACK — the SERVER's rule, not ours.
+#
+# This is a fallback and a starting guess, kept in step with `wddrop_server`'s own setting.
+# The real value arrives on every ingest response and is stored, because a client that
+# guesses at somebody else's deadline will eventually guess wrong: the Delete button counts
+# down against this, and a countdown that outlives the server's window offers a player a
+# deletion it cannot perform — after which their own copy is gone and the study's is not.
+REMOVAL_WINDOW_SECONDS = 86400
 
 
 @dataclass
@@ -348,6 +388,15 @@ class ClientConfig:
     # a player would notice.
     send_mode: str = SEND_BATCH
     send_batch_size: int = SEND_BATCH_SIZE
+    # The grace period above. Held records stay in the outbox and go with the next drain, so
+    # nothing is lost by waiting — only the SEND is deferred, exactly as with a batch.
+    send_delay_seconds: int = SEND_DELAY_SECONDS
+    # LEARNED, NOT SET. The server states its removal window on every ingest and this
+    # remembers the last answer, so the Delete button's countdown is the server's deadline
+    # rather than the client's opinion of it. Not on the Settings page: it is not a
+    # preference, and a player who could raise it would only be lengthening a countdown that
+    # the server would still refuse at the end of.
+    removal_window_seconds: int = REMOVAL_WINDOW_SECONDS
     # How many pickaxes the player is carrying. Never uploaded — it is theirs, not data.
     pickaxes: int = 0
     # The dungeon chosen last time. Restored on open because a player runs the same one for

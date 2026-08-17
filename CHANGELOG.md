@@ -21,6 +21,81 @@ the editing is what players read.
 
 Nothing yet.
 
+## [0.9.0] - 2026-08-17
+
+### Added
+
+- **Pause.** Start recording now turns into *Pause*, with *Stop recording* beside it. They
+  used to be one button, which meant a town trip or a phone call cost you the dive: the
+  clock a chest is filed under runs from the moment you pressed Start, so stopping and
+  starting again splits one farming run into two. Pausing keeps the run. Nothing is read
+  while it is paused, and the record page says so — the numbers stop moving, and a number
+  that has stopped with no reason beside it looks like a fault.
+
+- **Look back at a session you have already recorded.** A picker on the right of the dungeon
+  row lists your finished sessions, newest first, with when each one was and what came out
+  of it. Choosing one shows that session's ledger exactly as you watched it happen. Nothing
+  is sent or changed by looking, and everything it shows was already on your own computer —
+  no new information is recorded for this.
+
+- **Delete a reading the client was not sure of.** Some rows now carry a *Delete* button:
+  an amount the game never printed, a name that could not be placed, a panel line that was
+  not read, junk that does not match the dungeon you chose. Those are the ones you can settle
+  by looking at your own screen, which is evidence nobody else will ever have. Hover it and
+  it tells you what was wrong with the reading, and what deleting it will do.
+
+  Records are now **held for 20 seconds before being sent** (Settings → *Hold each record
+  before sending*), and while a record is held, deleting it removes it here and the study is
+  never told at all. After that the study has it, and deleting asks them to remove their copy
+  too — which they will do for a day. There is no countdown anywhere: when it can no longer
+  be taken back the button is simply gone.
+
+  **An empty chest never gets one.** It is a real observation and the worst possible outcome,
+  and letting those be deleted one at a time would quietly raise every drop rate this study
+  is trying to measure.
+
+### Changed
+
+- **A vein is read against eleven fewer names.** 錆びついた古銭, 貝貨, 砕けた徽章 and the
+  紅焔 and 雪光 families were in the list the mining panel could match, and a vein here does
+  not produce them. A name that cannot appear does not lose quietly — it wins — so taking
+  them out can only help, but it does mean a mined line that was previously read as one of
+  those will now read as the nearest name that is left. **No recorded swing has ever produced
+  one of the eleven**, so no existing recording is affected.
+
+- **Sale-only items are counted with the money.** On the Stats page, anything the game marks
+  as sold-only now sits under *Currency* rather than *Items* — including 透明な小石 and the
+  蒼雫 ores. The items list then answers "what did this dive give me" and the currency list
+  answers "what did it cash out to", instead of one ranking where the ore buries everything
+  else.
+
+- **The Stats headline shows one source at a time.** Choosing *Chests* used to print
+  「0 vein」 beside it, which reads as "you mined nothing" on a page that is deliberately not
+  showing mining. The openings count goes too when a source is chosen — with one source it
+  was the same number printed twice.
+
+- **The pickaxe count is put away while you are looking at an earlier session.** It is the
+  number in your bag right now, and editing it against a session that ended last night reads
+  as editing that session.
+
+### Fixed
+
+- **The word "paused" no longer stays on screen after you stop.** It described a session that
+  had already ended.
+
+- A recording that fails now leaves the page in the same state a stopped one does. It was
+  leaving the main button looking like a session was still running.
+
+### For the record
+
+- Records now say how much of a dive was spent paused, so a paused break can be told apart
+  from time spent playing. The dive clock itself is unchanged and still measures wall time
+  from when you started, which is what every recording made so far means by it.
+
+- A broken pickaxe is now filed under the session it happened in. The ones already recorded
+  carry no session and cannot be placed, so they will not appear when you look back at a
+  session from before this version.
+
 ## [0.8.0] - 2026-08-16
 
 ### Added
@@ -220,6 +295,7 @@ Nothing yet.
 
 Versions before 0.5.2 were built and tested but never published, so they are not listed here.
 
+[0.9.0]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.9.0
 [0.8.0]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.8.0
 [0.7.1]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.7.1
 [0.7.0]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.7.0
