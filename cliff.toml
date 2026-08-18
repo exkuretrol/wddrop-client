@@ -1,0 +1,69 @@
+# git-cliff — DRAFTS the changelog's [Unreleased] section. It does not own it.
+#
+# WHAT THIS IS FOR, AND WHAT IT IS NOT
+# ------------------------------------
+# Keep a Changelog has no generator, on purpose: "commit logs are terrible changelogs". This
+# project agrees for a concrete reason — the line a player needs is "which of my recordings
+# does this affect, and are they worth re-verifying", and that never fits in a subject.
+#
+# So this turns the conventional prefixes into Added/Changed/Fixed headings and leaves a
+# draft to edit. The release page is built from CHANGELOG.md (`build_exe.py
+# --release-notes`), so whatever survives the editing is what players read — not this.
+#
+#     tools/draft_changelog.sh          the unreleased commits, grouped, to stdout
+#     git-cliff --unreleased            the same thing without the wrapper
+#
+# Installed with `uv tool install git-cliff`; it is a dev aid, not a client dependency.
+
+[changelog]
+# No header: the draft is pasted UNDER the [Unreleased] heading that is already there.
+header = ""
+body = """
+{%- for group, commits in commits | group_by(attribute="group") %}
+### {{ group }}
+{% for commit in commits %}
+- {{ commit.message | split(pat="\n") | first | upper_first }}{% if commit.scope %}   _({{ commit.scope }})_{% endif %}
+{%- endfor %}
+{% endfor %}
+"""
+trim = true
+footer = ""
+
+[git]
+conventional_commits = true
+# Everything after the v0.5.3 tag is conventional — the subjects written before the style was
+# adopted were reworded when it was — so a commit that is not conventional now is a mistake
+# rather than history, and dropping it from the draft is the right way to notice.
+#
+# It was `false` for exactly as long as the old subjects existed: a draft that silently omits
+# half the work is worse than one with a section to sort by hand.
+filter_unconventional = true
+split_commits = false
+protect_breaking_commits = true
+filter_commits = false
+tag_pattern = "v[0-9].*"
+topo_order = false
+sort_commits = "oldest"
+
+# Conventional type -> Keep a Changelog heading. KAC has six and only six; anything that does
+# not map onto one of them is a change to the code that is not a change to the client, and it
+# belongs in the commit log rather than in front of a player.
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Changed" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^revert", group = "Changed" },
+  { message = "^remove", group = "Removed" },
+  { message = "^deprecate", group = "Deprecated" },
+  { message = "^security", group = "Security" },
+  # Kept, in their own heading, so the editor can decide. Most of these never reach a player.
+  { message = "^docs", group = "Not for players — docs" },
+  { message = "^test", group = "Not for players — tests" },
+  { message = "^chore", group = "Not for players — chore" },
+  { message = "^build", group = "Not for players — build" },
+  { message = "^ci", group = "Not for players — ci" },
+  # A well-formed commit with a type nothing above knows — a typo, or a type this file has
+  # not been told about. Kept visible rather than dropped, so it is fixed rather than missed.
+  { message = ".*", group = "Unsorted — unknown type" },
+]
