@@ -8,13 +8,8 @@ useless: opening it shows nothing at all.
 """
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
-sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
 import pytest  # noqa: E402
 

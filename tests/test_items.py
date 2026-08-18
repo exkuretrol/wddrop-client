@@ -9,15 +9,12 @@ rather than the one the game is in.
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
 
-import pytest  # noqa: E402
+import pytest
 
-from wddrop_client.items import ItemIndex, ItemNames  # noqa: E402
+from wddrop_client.items import ItemIndex, ItemNames
 
 VOCAB = {"items": [{"name": "透明な小石", "id": 20000000, "type": "Item::Junk"},
                    {"name": "下級鉄鉱石", "id": 470000000, "type": "Item::SaleOnly"}],

@@ -12,18 +12,14 @@ with a pre-registered analysis over pooled data instead.
 from __future__ import annotations
 
 import json
-import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
-sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
-from wddrop_client.stats import summarise  # noqa: E402
+from wddrop_client.stats import summarise
 
 NOW = datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc)
 

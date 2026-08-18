@@ -18,15 +18,11 @@ the reason the reader was rewritten to anchor on the separator.
 from __future__ import annotations
 
 import pathlib
-import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
 
 import pytest  # noqa: E402
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paths  # noqa: E402
 
 pytest.importorskip("numpy", reason="numpy not installed")

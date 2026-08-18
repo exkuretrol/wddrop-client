@@ -10,11 +10,9 @@ player, on whatever line it happens to be.
 from __future__ import annotations
 
 import re
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
 
 from wddrop_client.i18n import (FALLBACK, LOCALES, NATIVE_NAMES, STRINGS,  # noqa: E402
                                 Translator, match_locale)

@@ -6,16 +6,11 @@ The case throughout is real: 雪兇鳥羽冠 misread by one character scores 0.8
 """
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
-sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
-from wddrop_client.capture.ocr import Vocabulary, VocabEntry  # noqa: E402
-from wddrop_client.review import (  # noqa: E402
+from wddrop_client.capture.ocr import Vocabulary, VocabEntry
+from wddrop_client.review import (
     Candidate, CorrectionMap, ResolutionSource, ReviewQueue, top_candidates,
 )
 

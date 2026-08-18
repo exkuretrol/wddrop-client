@@ -23,15 +23,12 @@ which cannot do any of this still records.
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
 
-import pytest  # noqa: E402
+import pytest
 
-from wddrop_client.capture import source as source_module  # noqa: E402
-from wddrop_client.capture import wgc  # noqa: E402
+from wddrop_client.capture import source as source_module
+from wddrop_client.capture import wgc
 
 
 def test_it_is_unavailable_where_it_cannot_work(monkeypatch):

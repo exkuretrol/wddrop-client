@@ -6,16 +6,11 @@ walking (HUD) -> HUD gone -> 「打開」 -> trap panel -> 獲得了… lines ->
 """
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
-sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
-from wddrop_client.capture.episodes import EpisodeTracker  # noqa: E402
-from wddrop_client.capture.ocr import MessageFormat  # noqa: E402
+from wddrop_client.capture.episodes import EpisodeTracker
+from wddrop_client.capture.ocr import MessageFormat
 
 ZH_TW = ("<color=#E2CCB2>獲得了{0}！！</color>", "{0}×{1}",
          "Msg@<color=#E2CCB2>但是裡面什麼都沒有……</color>")

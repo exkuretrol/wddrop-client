@@ -16,13 +16,8 @@ The player asked for 20fps and got 2.5 at 1080, median 448ms between frames.
 """
 from __future__ import annotations
 
-import sys
 import time
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
-sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
 import pytest  # noqa: E402
 

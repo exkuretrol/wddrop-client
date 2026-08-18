@@ -15,15 +15,11 @@ mid-session.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
 
-import pytest  # noqa: E402
+import pytest
 
-from wddrop_client.capture.source import ScreenSource  # noqa: E402
+from wddrop_client.capture.source import ScreenSource
 
 STARTED = {"left": 100, "top": 200, "width": 704, "height": 1241}
 

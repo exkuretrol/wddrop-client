@@ -18,11 +18,9 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paths  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
 
 pytest.importorskip("numpy")
 pytest.importorskip("PIL.Image")
@@ -144,7 +142,6 @@ def test_live_capture_actually_grabs_the_panel():
     import sys
     from types import SimpleNamespace
 
-    sys.path.insert(0, str(ROOT / "packages" / "schema"))
     from wddrop_client.__main__ import _capture_strips
     from wddrop_client.capture.panel import SEARCH_BOTTOM, SEARCH_TOP
 

@@ -10,12 +10,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
 # `__main__` imports the schema package; the verify module itself does not.
-sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
-from wddrop_client.verify import CONFIRMED, CORRECTED, ChestTruth, TruthStore  # noqa: E402
+from wddrop_client.verify import CONFIRMED, CORRECTED, ChestTruth, TruthStore
 
 
 def test_key_is_stable_across_replays():
@@ -120,10 +117,6 @@ def test_profile_store_keys_by_resolution(tmp_path):
     """Windowed and fullscreen must coexist. Every region in a profile is absolute pixels, so
     one profile is only valid at one resolution — keeping just the newest meant recalibrating
     every time the window changed, and discarding the other fit."""
-    import sys
-    from pathlib import Path as P
-
-    sys.path.insert(0, str(P(__file__).resolve().parents[1] / "client"))
     from wddrop_client.calibration import Profile, ProfileStore
 
     def make(w, h, size):
@@ -145,10 +138,6 @@ def test_profile_store_keys_by_resolution(tmp_path):
 
 def test_profile_store_falls_back_to_a_legacy_single_profile(tmp_path):
     """Existing setups have profile.json and must keep working without recalibrating."""
-    import sys
-    from pathlib import Path as P
-
-    sys.path.insert(0, str(P(__file__).resolve().parents[1] / "client"))
     from wddrop_client.calibration import Profile, ProfileStore
 
     Profile(frame_size=(1920, 1080), message_band=(10, 30), font_path="f.ttf",

@@ -8,13 +8,10 @@ the open question, and it can only be answered if the covariate sits beside the 
 """
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
-sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
 from wddrop_client import progress  # noqa: E402
 

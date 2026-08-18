@@ -99,9 +99,9 @@ RUNTIME_IMPORTS = [
 def entry_script(target: Path) -> Path:
     """A launcher with no sys.path games in it.
 
-    wddrop.py puts client/ and packages/schema/ on the path at run time, which is right for a
-    checkout and wrong for a bundle: PyInstaller has to see the imports statically or it packs
-    neither package.
+    wddrop.py puts client/ on the path at run time, which is right for a checkout and wrong
+    for a bundle: PyInstaller has to see the imports statically or it packs nothing.
+    wddrop_schema needs no --paths — it is installed in the build environment.
     """
     body = [
         '"""Entry point for the bundled client — see build_exe.py."""',
@@ -400,7 +400,6 @@ def main(argv: list[str] | None = None) -> int:
         sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onefile",
         "--name", args.name,
         "--paths", str(HERE / "client"),
-        "--paths", str(HERE / "packages" / "schema"),
         "--distpath", str(HERE / "dist"),
         "--workpath", str(build / "work"),
         "--specpath", str(build),

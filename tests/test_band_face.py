@@ -20,15 +20,11 @@ See the vault: Reference/UI Font System.
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
-sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
-from wddrop_client.__main__ import _band_source, _scenario_beside  # noqa: E402
+from wddrop_client.__main__ import _band_source, _scenario_beside
 
 
 def _atlases(tmp_path: Path, scenario: bool = True) -> str:

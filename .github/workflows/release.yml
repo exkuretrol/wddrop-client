@@ -44,7 +44,13 @@ jobs:
             exit 1
           fi
 
-      - run: pip install pytest pillow numpy pydantic httpx mss
+      # The client is INSTALLED rather than reached for on sys.path. The tests used to put
+      # client/ on the path themselves, which meant they could pass against a source tree
+      # that no longer resembled what an install produces. `-e` keeps it editable so a
+      # failure still points at the file in this checkout.
+      #
+      # wddrop-schema comes with it, pinned in client/pyproject.toml.
+      - run: pip install -e ./client pytest pillow numpy mss
       # Most tests need the data files or a recording and skip without them. The ones that
       # run here are the ones that need neither, which is still the majority of the logic.
       - run: python -m pytest tests -q

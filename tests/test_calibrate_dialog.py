@@ -15,8 +15,6 @@ from types import SimpleNamespace
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
-sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
 pytest.importorskip("PySide6", reason="the window is asked for explicitly")
 pytest.importorskip("PIL.Image")

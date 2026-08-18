@@ -19,7 +19,6 @@ warning, and a waiting-count of zero, which reads as "everything went".
 from __future__ import annotations
 
 import json
-import sys
 import threading
 import time
 import uuid
@@ -27,9 +26,6 @@ from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
-sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
 import pytest  # noqa: E402
 

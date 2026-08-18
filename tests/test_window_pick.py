@@ -7,16 +7,11 @@ did, so the client tried to read a 2560x1392 chat window as if it were the game.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
 # The CLI module imports the schema package, which lives beside the client rather than
 # being installed.
-sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
-from wddrop_client.capture import window as W  # noqa: E402
+from wddrop_client.capture import window as W
 
 
 def make(title, w, h, process=""):

@@ -15,18 +15,14 @@ through the real runner, so it exercises the same path a live capture takes.
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
-sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
 import pytest  # noqa: E402
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paths  # noqa: E402
 
 QtCore = pytest.importorskip("PySide6.QtCore", reason="PySide6 not installed")

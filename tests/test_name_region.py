@@ -20,16 +20,12 @@ must get a second look at a wider one.
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
-sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
 import pytest  # noqa: E402
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 import paths  # noqa: E402
 
 pytest.importorskip("numpy", reason="numpy not installed")

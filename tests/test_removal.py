@@ -14,15 +14,10 @@ They were looking at the screen.
 from __future__ import annotations
 
 import json
-import sys
 import uuid
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "client"))
-sys.path.insert(0, str(ROOT / "packages" / "schema"))
 
-from wddrop_client.removal import (NEAR_THE_GATE, is_imprecise,  # noqa: E402
+from wddrop_client.removal import (NEAR_THE_GATE, is_imprecise,
                                    remove_record, why_imprecise)
 
 
