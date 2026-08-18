@@ -40,8 +40,10 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-# What client/pyproject.toml declares. Kept in step by test_build.py rather than parsed here,
-# so this script has no dependency on a toml reader.
+# What client/pyproject.toml declares. Kept in step by tests/test_build.py rather than parsed
+# here, so this script has no dependency on a toml reader. That test did not exist until a
+# release build shipped without the wire format and PyInstaller quietly left pydantic out
+# with it; the comment claimed a guard for months that nothing was enforcing.
 PYTHON_FLOOR = (3, 11)
 # Checked differently from the rest: the client reaches this one through a shim (see
 # capture/wgc.py) that satisfies the OpenCV import the package makes at module scope and this
@@ -89,6 +91,14 @@ RUNTIME_IMPORTS = [
     ("mss", "mss>=9.0", "screen capture: there is no way to see the game"),
     ("httpx", "httpx>=0.27", "uploading: records are kept but never sent"),
     ("pydantic", "pydantic>=2.7", "the record format — nothing can be spooled"),
+    # The wire format, and the reason pydantic reaches the bundle at all: nothing in
+    # wddrop_client imports pydantic directly, only through this. It used to arrive as a
+    # source folder on --paths and had no place in this list; as an installed dependency
+    # it needs one, and the URL has to be here rather than the bare name, which no index
+    # can resolve.
+    ("wddrop_schema",
+     "wddrop-schema @ https://github.com/exkuretrol/wddrop-schema/archive/refs/tags/v0.1.0.tar.gz",
+     "the wire format — the client cannot build a record, so nothing is recorded at all"),
     ("UnityPy", "UnityPy", "reading the game's own font: no atlas can be built"),
     (WINDOW_CAPTURE, "windows-capture",
      "reading the game WINDOW: capture falls back to the screen, and anything in front of "
