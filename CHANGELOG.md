@@ -21,6 +21,30 @@ the editing is what players read.
 
 Nothing yet.
 
+## [0.9.1] - 2026-08-18
+
+### Fixed
+
+- **Recording works on Windows 10 again.** Pressing Start ended a few seconds later with
+  *"window capture produced no frames. Is the game minimised?"* — with the game plainly on
+  screen and drawing.
+
+  The client reads the game's **own window** rather than a picture of your screen, so that
+  anything you put in front of the game does not land in the recording. When it asked for
+  that, it also asked Windows to switch off the yellow *being captured* border that appears
+  around a window being read. That switch exists only on Windows 11. Asking for it on
+  Windows 10 does not get politely ignored: it ends the capture before a single frame
+  arrives, which is why the client then said it had seen none.
+
+  It now asks only for what the Windows it is running on actually has. Windows 10 records
+  through the same path as Windows 11 and loses nothing by it — Windows 10 never draws that
+  border in the first place.
+
+  **This has been the case since 0.5.2**, so a Windows 10 machine could not record at all
+  for that whole time unless it was told to read the screen instead. Nothing about how a
+  frame is READ changed here: recordings already made are unaffected, on either Windows, and
+  none of them need re-verifying.
+
 ## [0.9.0] - 2026-08-17
 
 ### Added
@@ -295,6 +319,7 @@ Nothing yet.
 
 Versions before 0.5.2 were built and tested but never published, so they are not listed here.
 
+[0.9.1]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.9.1
 [0.9.0]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.9.0
 [0.8.0]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.8.0
 [0.7.1]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.7.1

@@ -175,3 +175,41 @@ def test_never_seeing_a_first_frame_is_reported(monkeypatch):
     monkeypatch.setattr(source._latest, "get", never)
     with pytest.raises(RuntimeError, match="minimised"):
         next(source.frames())
+
+
+def test_options_an_older_windows_lacks_are_not_asked_for(monkeypatch):
+    """Windows 10 has no capture-border property, and asking to turn the border off there
+    fails the whole session — "Toggling the capture border is not supported on this
+    platform", raised on the compositor's thread, where the only symptom on this side is a
+    window that never produces a frame. Measured on Windows 10 22H2 with the real game.
+
+    Windows 11 still gets the border turned off, which is what it was always for.
+    """
+    monkeypatch.setattr(wgc.sys, "platform", "win32")
+    asked: list = []
+
+    class FakeNative:
+        def __init__(self, *args):
+            asked.append(args)
+
+        def start_free_threaded(self):
+            return object()
+
+    monkeypatch.setattr(wgc, "_native", lambda: FakeNative)
+
+    def build(number):
+        monkeypatch.setattr(wgc, "_windows_build", lambda: number)
+
+    build(19045)                                       # Windows 10 22H2
+    wgc.WindowSource(handle=1, fps=20.0)._start()
+    cursor, border = asked[-1][2:4]
+    assert border is None, "Windows 10 was asked to toggle a border it does not have"
+    assert cursor is False, "1903 does have the cursor toggle; it should still be used"
+
+    build(22631)                                       # Windows 11 23H2
+    wgc.WindowSource(handle=1, fps=20.0)._start()
+    assert asked[-1][2:4] == (False, False), "Windows 11 lost the borderless capture"
+
+    build(17763)                                       # Windows 10 1809, before either
+    wgc.WindowSource(handle=1, fps=20.0)._start()
+    assert asked[-1][2:4] == (None, None)

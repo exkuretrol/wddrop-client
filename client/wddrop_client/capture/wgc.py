@@ -53,6 +53,13 @@ LATEST_ONLY = 1
 # drawing produces one within a frame or two; nothing at all in this long means the
 # compositor is not going to send any, and the caller should fall back rather than hang.
 FIRST_FRAME_TIMEOUT = 4.0
+# The Windows build at which each capture option became settable at all. Below these, the
+# property is not on the compositor's session class, and asking for it — for EITHER value —
+# fails the whole session instead of being ignored. That is why they are checked before the
+# session is made rather than caught after: the failure happens on the compositor's thread,
+# where the only symptom reaching this side is frames that never arrive.
+CURSOR_TOGGLE_BUILD = 18362                                # Windows 10 1903
+BORDER_TOGGLE_BUILD = 22000                                # Windows 11 21H2
 
 
 class _NoOpenCV(types.ModuleType):
@@ -87,6 +94,54 @@ def _native():
     from windows_capture.windows_capture import NativeWindowsCapture
 
     return NativeWindowsCapture
+
+
+def _windows_build() -> int:
+    """Which Windows this actually is, asked in the way that cannot be lied to.
+
+    NOT `sys.getwindowsversion()`, which goes through GetVersionEx and answers according to
+    the application manifest — an exe whose manifest does not claim Windows 10 support is
+    told it is running on Windows 8, build 9200. This client ships as a PyInstaller bundle
+    whose manifest is PyInstaller's, not ours, so that is not a hypothetical. Being lied to
+    here would cost Windows 11 the borderless capture rather than break it, which is a
+    cosmetic loss nobody would have reported, and is exactly the kind of thing to get right
+    once rather than to wonder about.
+
+    RtlGetVersion is the kernel's own answer and is not shimmed. If it is not reachable at
+    all, the manifest-bound answer is still better than none.
+    """
+    import ctypes
+
+    class OSVERSIONINFOW(ctypes.Structure):
+        _fields_ = [("dwOSVersionInfoSize", ctypes.c_ulong),
+                    ("dwMajorVersion", ctypes.c_ulong),
+                    ("dwMinorVersion", ctypes.c_ulong),
+                    ("dwBuildNumber", ctypes.c_ulong),
+                    ("dwPlatformId", ctypes.c_ulong),
+                    ("szCSDVersion", ctypes.c_wchar * 128)]
+
+    info = OSVERSIONINFOW()
+    info.dwOSVersionInfoSize = ctypes.sizeof(info)
+    try:
+        if ctypes.windll.ntdll.RtlGetVersion(ctypes.byref(info)) == 0:
+            return int(info.dwBuildNumber)
+    except Exception:                                      # noqa: BLE001
+        pass
+    return int(sys.getwindowsversion().build)
+
+
+def _toggle(introduced_in: int, value: bool):
+    """`value` on a Windows that has the option, None on one that does not.
+
+    None means "ask for nothing and take the default", which is the right answer rather
+    than a degraded one: the yellow capture border these turn off is a Windows 11 feature,
+    so a Windows 10 default is already borderless. Asking anyway is what fails —
+    "Toggling the capture border is not supported on this platform" — and it fails the
+    session, not the option.
+    """
+    if not sys.platform.startswith("win"):
+        return None
+    return value if _windows_build() >= introduced_in else None
 
 
 def available() -> bool:
@@ -207,8 +262,10 @@ class WindowSource:
         capture = _native()(
             self._on_frame,          # on_frame_arrived
             self._on_closed,         # on_closed
-            False,                   # cursor_capture — the cursor is not the game
-            False,                   # draw_border — no yellow rectangle around the game
+            # Not the plain False they were. See _toggle: on the Windows that lacks either
+            # property, asking for it at all ends the capture session.
+            _toggle(CURSOR_TOGGLE_BUILD, False),   # the cursor is not the game
+            _toggle(BORDER_TOGGLE_BUILD, False),   # no yellow rectangle around the game
             None,                    # secondary_window
             None,                    # minimum_update_interval
             None,                    # dirty_region
