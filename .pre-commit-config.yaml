@@ -1,0 +1,17 @@
+# Conventional Commits, checked when the message is written rather than after.
+#
+# Install it once per clone — hooks are not carried by git, so a fresh clone has none:
+#
+#     uv tool install pre-commit
+#     pre-commit install --hook-type commit-msg
+#
+# The pytest guard that also checks this is not redundant: it runs in CI, where nobody has
+# run the line above. This one gives the answer before the commit exists; that one is what
+# stops an unchecked clone from getting away with it.
+repos:
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.2.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [feat, fix, docs, test, chore, build, ci, perf, refactor, revert, style]
