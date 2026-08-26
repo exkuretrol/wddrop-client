@@ -1959,6 +1959,37 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stats_day.setCurrentIndex(at if at >= 0 else 0)
         self.stats_day.blockSignals(False)
 
+    def _atlas_gaps(self, vocabulary, atlas) -> set[str]:
+        """Characters the item table needs that the atlas cannot draw. Cached per file pair.
+
+        Asked on every refresh, so it must not cost a JSON load each time — and it must not
+        cache so hard that the rebuild it triggers cannot clear it. Keying on the paths AND
+        their modification times does both: the answer stands until one of the two files is
+        replaced, and replacing the atlas is exactly what a rebuild does.
+        """
+        import json
+
+        from .atlas import uncovered
+
+        try:
+            key = (str(vocabulary), Path(vocabulary).stat().st_mtime_ns,
+                   str(atlas), Path(atlas).stat().st_mtime_ns)
+        except OSError:
+            return set()
+        cached = getattr(self, "_atlas_gap_cache", None)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        try:
+            vocab = json.loads(Path(vocabulary).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return set()
+        gaps = uncovered(vocab, atlas)
+        if gaps:
+            log.info("wddrop: the atlas cannot draw %d character(s) this item table needs "
+                     "(%s) — rebuilding it", len(gaps), "".join(sorted(gaps)))
+        self._atlas_gap_cache = (key, gaps)
+        return gaps
+
     def _build_atlas(self) -> None:
         """Make the glyph atlas from the game's own font, once.
 
@@ -2881,6 +2912,24 @@ class MainWindow(QtWidgets.QMainWindow):
         # actually happen, and nothing else would ever trigger it.
         stale = found["atlas"] is not None and find_data(
             "atlas.{locale}.scenario.json", locale) is None
+        # AND AN ATLAS OLDER THAN THE ITEM TABLE IT IS ABOUT TO READ. The sheet is built once,
+        # on a fresh install, and the two conditions above are the only things that ever
+        # rebuilt it — so a client update that brings a NEW item table kept the old sheet and
+        # every name needing a character it lacks became unmatchable. Not misread: the
+        # renderer draws the name with a hole, it is refused on margin, and the line is
+        # absent from a record that still looks complete.
+        #
+        # Measured on the table that prompted this, ja 1.34.5 -> 1.35.0: exactly one new
+        # character, 夕, and exactly one name that cannot be read without it, 夕凪の女傑の印 —
+        # which was one of the two items that release existed to add.
+        #
+        # A SUBSET TEST, never equality: a sheet carrying more than the table asks for is
+        # fine, and rebuilding it would demand the one thing a rebuild needs and a player may
+        # no longer have — the game installed. And the old sheet is left in place until a new
+        # one is written, so a machine that cannot rebuild keeps reading everything it could
+        # read before rather than losing the atlas it has.
+        if found["atlas"] is not None and found["vocabulary"] is not None and not stale:
+            stale = bool(self._atlas_gaps(found["vocabulary"], found["atlas"]))
         if found["vocabulary"] is not None and (found["atlas"] is None or stale):
             self._build_atlas()
         # WHAT is loaded, not WHERE from. Three absolute paths in a monospace block was the

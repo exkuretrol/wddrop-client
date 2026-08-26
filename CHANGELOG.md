@@ -47,6 +47,25 @@ No code changed — but the version did, and that is the point of the release.
 - **Eight 導きの霊廟の遺骸 ids left the list.** They are still in the game; they no longer pass
   the filter for what a dungeon can actually hand over. Nothing recorded so far names one.
 
+### Fixed
+
+- **An update that brings new items now rebuilds the glyph sheet.** It was built once, on a
+  fresh install, and only two things ever rebuilt it — the file being gone, and the scenario
+  sheet being gone. Neither asks whether it can still draw the item table it is about to
+  read. So on 0.9.1 and earlier, updating the client kept the old sheet, and any name needing
+  a character it lacked stopped matching: the name is drawn with a hole, scored like a
+  misread, refused, and left out of a record that still looks complete.
+
+  Without this, half of what this release adds would not have worked on an existing install.
+  夕凪の女傑の印 needs 夕, which no sheet built before today carries — so the item this release
+  exists to add would have gone on being invisible to everyone who already had the client,
+  and only new installs would have seen it.
+
+  The check is a subset, not a comparison: a sheet carrying *more* than the table asks for is
+  left alone. A rebuild needs the game installed, which by design you may no longer have, so
+  it is not spent on nothing — and the sheet you already have stays in place until a new one
+  is written, so a machine that cannot rebuild keeps reading everything it read before.
+
 ### Unchanged, and worth saying
 
 Item **names** did not move: zero renamed, zero retyped, across 1,574 items and 812 equipment

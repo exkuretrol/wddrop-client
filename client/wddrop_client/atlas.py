@@ -66,6 +66,35 @@ def charset_for(vocab: dict) -> set[str]:
     return {c for c in chars if c.isprintable() or c.isspace()}
 
 
+def uncovered(vocab: dict, atlas_path) -> set[str]:
+    """Characters this vocabulary needs that the atlas on disk cannot draw.
+
+    WHY THIS IS A SUBSET TEST AND NOT AN EQUALITY ONE. An atlas carrying MORE than the
+    vocabulary asks for is not stale — it is what a sheet built from a wider table looks
+    like, and rebuilding it would cost a player the one thing a rebuild needs and may not
+    have: the game installed. Only what is MISSING can make a name unmatchable.
+
+    And a missing character is the quiet failure, not a loud one: `AtlasRenderer` records it
+    and draws the name with a hole, which scores like a misread and is refused on margin. The
+    line is then simply absent from the record, and the record looks like a chest that held
+    less. So this is asked before anything is read, rather than noticed afterwards.
+
+    `charset_for` is the same function `build` composes the sheet from, so the question asked
+    here and the answer written there cannot drift apart.
+
+    Returns an empty set when the atlas cannot be read at all — a missing or corrupt sheet is
+    already handled by the caller as "no atlas", and reporting it as a coverage problem would
+    send it down a path that assumes there is something to compare.
+    """
+    import json
+
+    try:
+        index = json.loads(Path(atlas_path).read_text(encoding="utf-8"))["index"]
+    except (OSError, ValueError, KeyError):
+        return set()
+    return {c for c in charset_for(vocab) if c not in index}
+
+
 class FontSet:
     """A primary font plus the fallbacks the game itself must be using.
 

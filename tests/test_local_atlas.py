@@ -79,3 +79,65 @@ def test_characters_no_font_can_draw_are_reported_not_dropped(tmp_path):
     meta = json.loads(result["meta"].read_text(encoding="utf-8"))
     assert set(result["unresolved"]) == set(meta["unresolved"])
     assert all(ch in meta["index"] for ch in "\U0002A6B2\U0002A6B1"), "a character vanished"
+
+
+# -- an atlas older than the item table it is about to read ---------------------------
+
+def test_an_atlas_missing_one_character_is_reported(tmp_path):
+    """The whole defect in one assertion.
+
+    The sheet is built once, on a fresh install; before this, the only things that rebuilt it
+    were the file being absent and the scenario sheet being absent. So a client update
+    carrying a NEW item table kept the old sheet, and every name needing a character it
+    lacked became unmatchable — not misread, which would show up as a wrong name, but drawn
+    with a hole, refused on margin, and simply absent from a record that still looks
+    complete.
+
+    Measured on the table that prompted this, ja 1.34.5 -> 1.35.0: one new character, 夕, and
+    one name that cannot be read without it — 夕凪の女傑の印, which was half the reason that
+    release existed.
+    """
+    import json
+
+    from wddrop_client.atlas import uncovered
+
+    atlas = tmp_path / "atlas.json"
+    atlas.write_text(json.dumps({"index": {c: {} for c in charset_for(VOCAB)}}),
+                     encoding="utf-8")
+    assert uncovered(VOCAB, atlas) == set()
+
+    # The real table added one character to a vocabulary that already had the rest; this
+    # fixture is small, so the same name arrives needing six. What is being asserted is the
+    # same thing either way: every character the name needs and the sheet lacks, and no more.
+    grown = {**VOCAB, "items": VOCAB["items"] + [{"name": "夕凪の女傑の印"}]}
+    assert uncovered(grown, atlas) == set("夕凪の女傑印")
+
+
+def test_a_sheet_carrying_MORE_than_the_table_asks_for_is_not_stale(tmp_path):
+    """A subset test, never equality — and this is the case that makes the difference.
+
+    A rebuild needs the one thing a player may no longer have: the game installed. An atlas
+    built from a wider table (or from a locale's fuller vocabulary) draws every name this one
+    asks for, so treating "different" as "stale" would spend that on nothing, and would fail
+    on exactly the machines that cannot afford it.
+    """
+    import json
+
+    from wddrop_client.atlas import uncovered
+
+    atlas = tmp_path / "atlas.json"
+    wider = charset_for(VOCAB) | set("夕凪の女傑印北穿幽霊城")
+    atlas.write_text(json.dumps({"index": {c: {} for c in wider}}), encoding="utf-8")
+    assert uncovered(VOCAB, atlas) == set()
+
+
+def test_an_unreadable_sheet_is_not_reported_as_a_coverage_problem(tmp_path):
+    """Missing or corrupt is already "no atlas" to the caller, and it rebuilds for that
+    reason. Answering "these characters are missing" would send it down a path whose whole
+    premise is that there is a sheet to compare against."""
+    from wddrop_client.atlas import uncovered
+
+    assert uncovered(VOCAB, tmp_path / "nothing.json") == set()
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    assert uncovered(VOCAB, bad) == set()
