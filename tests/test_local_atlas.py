@@ -141,3 +141,30 @@ def test_an_unreadable_sheet_is_not_reported_as_a_coverage_problem(tmp_path):
     bad = tmp_path / "bad.json"
     bad.write_text("{not json", encoding="utf-8")
     assert uncovered(VOCAB, bad) == set()
+
+
+def test_a_character_the_sheet_lacks_is_said_out_loud_once(tmp_path, caplog):
+    """`missing` was written down and read by nothing, so a hole in the sheet left no trace.
+
+    ONCE per character, and that bound is the whole reason this can be logged at all:
+    `_glyph` runs per character of every candidate and building an index renders thousands
+    of them, so a line that could repeat would bury the trace it sits in. The cache is what
+    makes the branch unreachable a second time — this asserts the cache, not the wording.
+    """
+    import logging
+
+    from wddrop_client.capture.glyph import AtlasRenderer
+
+    if FONT is None:
+        pytest.skip("no font with the characters this needs")
+    build(FONT, VOCAB, tmp_path, "zh_tw")
+    renderer = AtlasRenderer(str(tmp_path / "atlas.zh_tw.json"), 22, (400, 40))
+
+    unknown = chr(1) + chr(2) + chr(1)
+    with caplog.at_level(logging.DEBUG, logger="wddrop.glyph"):
+        renderer.render(unknown)
+        renderer.render(unknown)
+
+    said = [r for r in caplog.records if "cannot draw" in r.getMessage()]
+    assert len(said) == 2, "one line per character, however often it is rendered"
+    assert renderer.missing == {chr(1), chr(2)}

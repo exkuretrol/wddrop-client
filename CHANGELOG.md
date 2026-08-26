@@ -66,6 +66,11 @@ No code changed — but the version did, and that is the point of the release.
   it is not spent on nothing — and the sheet you already have stays in place until a new one
   is written, so a machine that cannot rebuild keeps reading everything it read before.
 
+- **A missing character now says so in the log.** The renderer recorded every glyph the sheet
+  could not draw, in a set nothing ever read — so on the one occasion it mattered, the only
+  symptom was a line quietly not being recorded. *Write a detailed log* now names the
+  character, once each, whatever else goes wrong to cause it.
+
 ### Unchanged, and worth saying
 
 Item **names** did not move: zero renamed, zero retyped, across 1,574 items and 812 equipment

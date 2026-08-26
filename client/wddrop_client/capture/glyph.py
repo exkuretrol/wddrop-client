@@ -304,8 +304,24 @@ class AtlasRenderer:
         if entry is None:
             # Recorded rather than silently skipped: a missing glyph means the atlas and the
             # vocabulary disagree, which would otherwise surface as unexplained misses.
+            #
+            # AND SAID OUT LOUD, because `missing` was written down and read by nothing. A
+            # character the sheet lacks is drawn as a hole; the name then scores like a
+            # misread, is refused on margin, and is absent from a record that still looks
+            # complete -- so the only evidence it ever happened lived in a set nobody asked.
+            # `ui._refresh_setup` now catches the ordinary cause before a session starts (an
+            # atlas older than the item table) and rebuilds; this is the witness for every
+            # other way it can happen -- a template character no item name contains, a sheet
+            # replaced under a running session, a locale whose fonts could not draw it.
+            #
+            # ONCE PER CHARACTER PER RENDERER, and only because the cache on the next line
+            # makes this branch unreachable a second time. `_glyph` runs per character of
+            # every candidate and `build` renders thousands of them, so a log line that could
+            # repeat here would bury the trace this file exists to write.
             self.missing.add(ch)
             self._cache[ch] = None
+            log.debug("wddrop: the atlas cannot draw %r (U+%04X) -- every name containing it "
+                      "renders with a hole and is refused", ch, ord(ch))
             return None
         box = (entry["x"], entry["y"], entry["x"] + self.cell, entry["y"] + self.cell)
         side = max(1, int(round(self.cell * self._scale * SUPERSAMPLE)))
