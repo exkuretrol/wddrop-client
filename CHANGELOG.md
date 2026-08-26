@@ -21,6 +21,43 @@ the editing is what players read.
 
 Nothing yet.
 
+## [0.9.2] - 2026-08-27
+
+The game's own item table moved to **1.35.0** (live 2026-08-20) and this build carries it.
+No code changed — but the version did, and that is the point of the release.
+
+### Added
+
+- **Two items this client could not see before.** 稀代の英傑の印 and 夕凪の女傑の印 are new
+  event points, and the recogniser matches a closed list of names: one it does not carry is
+  not misread, it is *silently left out*. A chest holding one was recorded looking complete
+  with a line simply gone — the same way 遺物残渣 went missing before the points table was
+  added at all.
+- **Four junk names from フォードレイグの迷宮**, which the dungeon list already offered. Diving
+  there on 0.9.1 or earlier means its junk was not recorded, and nothing on screen or in the
+  file says so.
+
+### Changed
+
+- **The version number, so your records can be told apart.** Nothing a record carries says
+  which item table read it — `client_version` is the only handle there is. Had this shipped
+  under 0.9.1, rows read against the 1.34.5 table and rows read against 1.35.0 would be one
+  indistinguishable pile, and "did this build know about that item" would have no answer.
+  That is the whole reason a data refresh gets a release of its own.
+- **Eight 導きの霊廟の遺骸 ids left the list.** They are still in the game; they no longer pass
+  the filter for what a dungeon can actually hand over. Nothing recorded so far names one.
+
+### Unchanged, and worth saying
+
+Item **names** did not move: zero renamed, zero retyped, across 1,574 items and 812 equipment
+families. Ids stay the durable identity, and everything recorded on 0.9.1 remains directly
+comparable with everything recorded on this build. Re-verifying old recordings is not needed.
+
+**What is not fixed here.** The panel geometry shipped with the client was fitted against the
+older table and no longer matches this one, so the client re-fits it once per session
+(a second or so, on the first mining panel) and then remembers it. Nothing is read worse;
+it is a second of work per dive until those fits are made again.
+
 ## [0.9.1] - 2026-08-18
 
 ### Fixed
@@ -319,6 +356,7 @@ Nothing yet.
 
 Versions before 0.5.2 were built and tested but never published, so they are not listed here.
 
+[0.9.2]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.9.2
 [0.9.1]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.9.1
 [0.9.0]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.9.0
 [0.8.0]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.8.0
