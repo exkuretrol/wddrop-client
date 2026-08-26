@@ -24,7 +24,12 @@ Nothing yet.
 ## [0.9.2] - 2026-08-27
 
 The game's own item table moved to **1.35.0** (live 2026-08-20) and this build carries it.
-No code changed — but the version did, and that is the point of the release.
+The version number moving with it is not bookkeeping — nothing a record carries says which
+item table read it, so it is the only thing that can ever tell your 1.34.5 recordings from
+your 1.35.0 ones.
+
+Two fixes came out of shipping it, and they are the reason the new items actually appear on a
+client you already have rather than only on a fresh install.
 
 ### Added
 
