@@ -65,3 +65,25 @@ def test_a_dependency_no_index_can_resolve_carries_its_url():
             break
     else:
         raise AssertionError("the wire format is not in the build list at all")
+
+
+# -- the licence has to be IN the distribution, not only named by it ------------------
+
+def test_the_licence_files_the_package_ships_match_the_ones_at_the_root():
+    """Two copies, and a guard so they cannot drift.
+
+    GitHub detects a licence only at the repository root; hatchling can only reach files
+    under its own project root, which is `client/`. So both places need them — and
+    `license-files` fails SILENTLY when a path is not there: the wheel built fine, said
+    `License-Expression: Apache-2.0`, and carried no licence text at all. Apache-2.0 §4(a)
+    wants recipients to actually get a copy, so the quiet version is the wrong one.
+
+    A symlink would avoid the copy and was rejected: the release builds on Windows, where a
+    checked-out symlink can materialise as a text file containing `../LICENSE`, and the wheel
+    would then ship that as its licence without anything failing.
+    """
+    for name in ("LICENSE", "NOTICE"):
+        root = (ROOT / name).read_bytes()
+        packaged = (ROOT / "client" / name).read_bytes()
+        assert root == packaged, (
+            f"client/{name} has drifted from {name} at the root — copy the root one over it")

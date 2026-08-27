@@ -1,0 +1,22 @@
+wddrop
+Copyright 2026 exkuretrol
+
+This software is not affiliated with, endorsed by, or sponsored by Drecom or the
+publishers of Wizardry Variants Daphne. Game names, item names and other marks
+belong to their respective owners, and this License grants no rights in them.
+
+It distributes no game assets. The glyph atlas the recogniser matches against is
+built on the user's own machine from the copy of the game already installed
+there, and is never redistributed; the item vocabulary it matches is derived from
+the game's own data and is not carried in this repository.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+this file except in compliance with the License. You may obtain a copy of the
+License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
