@@ -87,3 +87,73 @@ def test_the_licence_files_the_package_ships_match_the_ones_at_the_root():
         packaged = (ROOT / "client" / name).read_bytes()
         assert root == packaged, (
             f"client/{name} has drifted from {name} at the root — copy the root one over it")
+
+
+# -- what the exe says about itself ---------------------------------------------------
+
+def _evaluate_version_resource(path):
+    """Load it the way PyInstaller does — `eval` with the versioninfo names in scope.
+
+    PyInstaller's own loader is Windows-gated (it imports `win32api`), so it cannot be used
+    to check this off Windows. Stand-in classes prove the SHAPE, which is the part a build
+    would choke on; whether the PE resource is written correctly is the Windows job's to say.
+    """
+    body = "\n".join(l for l in path.read_text(encoding="utf-8").splitlines()
+                     if not l.startswith("#"))
+    strings = {}
+
+    class _Node:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class _StringStruct:
+        def __init__(self, name, value):
+            strings[name] = value
+
+    scope = {name: type(name, (_Node,), {}) for name in
+             ("VSVersionInfo", "FixedFileInfo", "StringFileInfo", "StringTable",
+              "VarFileInfo", "VarStruct")}
+    scope["StringStruct"] = _StringStruct
+    eval(body, scope)
+    return strings
+
+
+def test_the_exe_says_who_made_it_and_which_version_it_is(tmp_path):
+    """0.9.2 was flagged `Trojan:Win32/Wacatac.C!ml` — a generic ML verdict, not a signature
+    match. An unsigned one-file bundle with no prevalence starts out suspicious, and one that
+    also declines to name its publisher, product or version is a blank to everything that
+    looks at it, the Properties dialog a wary player opens included.
+
+    This is not the fix — signing is, and a developer submission clears a specific detection.
+    It removes one weight and costs nothing, so the thing worth guarding is that it is
+    actually there and actually says the version this build IS.
+    """
+    from build_exe import _client_version, version_resource
+
+    strings = _evaluate_version_resource(
+        version_resource(tmp_path / "v.txt", _client_version()))
+
+    assert strings["FileVersion"] == _client_version()
+    assert strings["ProductVersion"] == _client_version()
+    for field in ("CompanyName", "FileDescription", "ProductName", "LegalCopyright",
+                  "OriginalFilename", "InternalName"):
+        assert strings.get(field), f"{field} is empty, which is what this exists to prevent"
+
+
+def test_the_version_quad_is_derived_from_the_version_and_not_typed_twice(tmp_path):
+    """A fourth copy of the number would agree with the other three until it did not, and
+    the one place it would surface is a Properties dialog nobody reads."""
+    from build_exe import version_resource
+
+    text = version_resource(tmp_path / "v.txt", "1.2.3").read_text(encoding="utf-8")
+    assert "filevers=(1, 2, 3, 0)" in text
+    assert "prodvers=(1, 2, 3, 0)" in text
+    assert _evaluate_version_resource(tmp_path / "v.txt")["FileVersion"] == "1.2.3"
+
+
+def test_upx_is_decided_here_rather_than_by_the_runner_s_PATH():
+    """PyInstaller uses UPX if it happens to find it, so whether the exe shipped packed was a
+    property of the build image rather than a decision — and a packed binary is one more
+    weight against an unsigned bundle already being called a trojan."""
+    source = (ROOT / "build_exe.py").read_text(encoding="utf-8")
+    assert '"--noupx"' in source
