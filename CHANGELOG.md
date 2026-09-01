@@ -21,6 +21,43 @@ the editing is what players read.
 
 Nothing yet.
 
+## [0.9.3] - 2026-09-02
+
+**If Windows called 0.9.2 a trojan, it was wrong, and this explains why.** Defender flagged it
+as `Trojan:Win32/Wacatac.C!ml`. The `!ml` on the end is the part that matters: that is a
+machine-learning guess, not a match against known malware, and Wacatac is the label it uses
+for "this behaves like a dropper".
+
+It is not an unreasonable guess. This client is a single self-contained exe, which works by
+unpacking itself to a temporary folder and running what comes out — the same shape a real
+dropper has. It then watches your screen, reads another program's window, reads files out of
+the game's own folder, and uploads over the internet. Described that way it is exactly what a
+scanner is built to be suspicious of, and it is also, line for line, what the client is *for*.
+
+Nothing was found in it, because there is nothing in it to find. The source is public and the
+build is the workflow in that repository.
+
+### Changed
+
+- **The exe now says what it is.** It carried no publisher, product name or version at all, so
+  anything that inspected it — Defender included, and the Properties dialog you would open to
+  check — got a blank. It now names itself, its version, its licence, and that it is not
+  affiliated with the game's publisher.
+- **It is no longer compressed with UPX**, which had been left to whether the build machine
+  happened to have UPX installed. Compressed executables draw more suspicion, and the few
+  megabytes are not worth it.
+
+### If it still gets flagged
+
+Both changes make the guess less likely; neither can prevent it, and **each new release is a
+new file with no reputation, so being cleared once does not carry over.** The lasting fix is a
+signed binary, which is a cost being weighed rather than an oversight.
+
+Meanwhile: the flagged file is reported to Microsoft each time, which clears it for everyone
+within a few days. If you want to run it before then, allow that specific file in *Windows
+Security → Protection history* rather than turning protection off — and if you would rather
+not, waiting costs you nothing but the dives in between.
+
 ## [0.9.2] - 2026-08-27
 
 The game's own item table moved to **1.35.0** (live 2026-08-20) and this build carries it.
@@ -385,6 +422,7 @@ it is a second of work per dive until those fits are made again.
 
 Versions before 0.5.2 were built and tested but never published, so they are not listed here.
 
+[0.9.3]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.9.3
 [0.9.2]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.9.2
 [0.9.1]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.9.1
 [0.9.0]: https://github.com/exkuretrol/wddrop-client/releases/tag/v0.9.0
