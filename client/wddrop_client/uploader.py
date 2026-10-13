@@ -68,8 +68,13 @@ def hydrate(raw: dict, cfg: ClientConfig, mode: CaptureMode) -> DropEvent:
     # than a zero, because zero is a real answer — "I have finished none of it" — and one
     # nobody gave.
     answered = bool(getattr(cfg, "progress_width", 0))
+    # THE RECORD'S OWN MODE WINS. This used to take the uploader's argument unconditionally,
+    # which was harmless while one capture backend existed and is not now: a bot writes rows
+    # marked `autopilot`, and a player draining the same spool would stamp `ocr` over them —
+    # silently relabelling the arm of the study whose whole value is being distinguishable.
+    recorded_mode = raw.pop("capture_mode", None)
     raw["capture"] = CaptureInfo(
-        mode=mode,
+        mode=recorded_mode or mode,
         client_version=captured,
         locale=cfg.locale,
         qc=raw.pop("qc", {}) or {},
