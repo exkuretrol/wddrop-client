@@ -21,6 +21,40 @@ the editing is what players read.
 
 Nothing yet.
 
+## [0.9.4] - 2026-10-14
+
+**A window size nobody calibrated is no longer a dead end.** Until now the client could read
+three window sizes and refused every other one, telling the player to change the game's
+resolution — three because three were measured by hand, and a fourth would have meant a fourth
+measurement. The arrangement on screen is the same at every size, scaled to the window, so
+where the drop message sits and how wide it runs can be worked out from the window size alone.
+It now is.
+
+The three measured sizes keep their measurements. A fit that was checked against real
+recordings beats one that was computed, so 704x1241, 1920x1080 and 1600x900 are untouched, as
+is the case where the game draws at one size and the desktop stretches it to another. The
+computation is what happens when none of that applies — where the answer used to be "you
+cannot play at this size".
+
+### Added
+
+- **Geometry computed from the window size**, for any size without a measured fit. The
+  message band's position and the columns it is written in come out of it directly.
+
+### Known limits
+
+- **The text SIZE is computed too, and it is the part with the least behind it.** The computed
+  value is rounded UP rather than to nearest, which is what makes it match all three measured
+  sizes exactly; rounding to nearest matched two and missed the third. The miss is not a near
+  miss — at a size one pixel under, twelve real lines scored 0.37 and none was accepted, where
+  the right size took all twelve at 0.87. **A size that is one pixel out reads nothing at all.**
+- So if a newly supported window size records nothing, the size is the thing to doubt, not the
+  position. Rounding up is fitted to the three sizes that have been measured, and a fourth
+  could still land the other way. The three measured sizes keep their measured fits and are
+  unaffected either way.
+- **Windows the client never sees** — far taller than they are wide — are refused rather than
+  guessed at, because their usable area is inset by more than the window reports.
+
 ## [0.9.3] - 2026-09-02
 
 **If Windows called 0.9.2 a trojan, it was wrong, and this explains why.** Defender flagged it

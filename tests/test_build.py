@@ -48,7 +48,12 @@ def test_every_runtime_dependency_reaches_the_build():
     """The failure this file exists for: a dependency the client declares that the build
     environment never installs is not a build error — it is a bundle that starts and cannot
     record."""
-    listed = {_name(install) for _module, install, _why in build_exe.RUNTIME_IMPORTS}
+    # `install` is None for the entry whose pin is read from client/pyproject.toml rather
+    # than written out twice — see build_exe.schema_requirement(). Resolving it the way the
+    # build does is the point: a test that skipped it would stop covering the one dependency
+    # that cannot be fetched from an index by name.
+    listed = {_name(install or build_exe.schema_requirement())
+              for _module, install, _why in build_exe.RUNTIME_IMPORTS}
     missing = sorted(_declared() - listed)
     assert not missing, (
         "declared in client/pyproject.toml but not in build_exe.RUNTIME_IMPORTS:\n  "
@@ -60,8 +65,20 @@ def test_a_dependency_no_index_can_resolve_carries_its_url():
     index happens to hold under that name, or fail the build — and the first of those is
     worse than the second."""
     for _module, install, _why in build_exe.RUNTIME_IMPORTS:
-        if _name(install) == "wddrop-schema":
-            assert " @ http" in install, f"{install!r} names no source pip can fetch"
+        spec = install or build_exe.schema_requirement()
+        if _name(spec) == "wddrop-schema":
+            assert " @ http" in spec, f"{spec!r} names no source pip can fetch"
+            # AND THE SAME TAG THE CLIENT DECLARES. It used to be written out here as well
+            # as in client/pyproject.toml, and the two drifted the moment the pin moved: the
+            # build would have fetched an older wire format than the client is built against,
+            # so the exe would reject records the server accepts — on a version number, with
+            # nothing in the build output saying so.
+            declared = [line.strip().strip(",").strip('"')
+                        for line in (ROOT / "client" / "pyproject.toml")
+                        .read_text(encoding="utf-8").splitlines()
+                        if line.strip().strip(",").strip('"').startswith("wddrop-schema @")]
+            assert declared and spec == declared[0], (
+                f"the build fetches {spec!r} while the client declares {declared!r}")
             break
     else:
         raise AssertionError("the wire format is not in the build list at all")

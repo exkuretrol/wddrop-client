@@ -45,7 +45,10 @@ def test_the_launcher_asks_for_everything_the_exe_bundles():
 
     declared = " ".join(_script_dependencies()).lower()
     missing = []
-    for module, install, _why in build_exe.RUNTIME_IMPORTS:
+    for module, declared_spec, _why in build_exe.RUNTIME_IMPORTS:
+        # None means the pin lives in client/pyproject.toml rather than being written out
+        # twice; resolve it the way the build does. See build_exe.schema_requirement().
+        install = declared_spec or build_exe.schema_requirement()
         if module in ASKED_FOR_SEPARATELY:
             continue
         # `windows_capture.windows_capture` installs as `windows-capture`; compare on the

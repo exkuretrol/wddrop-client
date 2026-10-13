@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path, PurePosixPath
 
@@ -252,6 +253,57 @@ class Profile:
     panel_font_path: str | None = None
     panel_data_version: str | None = None
     notes: dict = field(default_factory=dict)
+
+    @classmethod
+    def derived(cls, frame_size, *, font_path: str, locale: str = "",
+                windows: bool = True, safe_area=None) -> "Profile":
+        """A profile computed from the frame size, for a size nobody has calibrated.
+
+        The three sizes with a shipped fit keep it — a tested fit beats a computed one, and
+        this does not try to replace them. What it replaces is the DEAD END: before this, a
+        player whose window was any other size was told to change the game's resolution,
+        because a fit existed for three sizes and nothing else. The arrangement is the same
+        at every size, so the band's position and the width a line runs can be computed, and
+        the only thing that cannot is the size the line is drawn at.
+
+        So `font_size` here is A STARTING POINT, not a measurement. The caller sweeps a pixel
+        either side and keeps what scores best; at one known size the computed value is a
+        pixel under what actually reads, and shipping it unchecked would read plausible
+        wrong names rather than fail. `calibration_score` is 0.0 to say exactly that: nothing
+        has scored this yet.
+        """
+        from .capture.derive import band_geometry
+
+        g = band_geometry(tuple(frame_size), windows=windows, safe_area=safe_area)
+        pen_x, pen_y = g.pen
+        return cls(
+            frame_size=(int(frame_size[0]), int(frame_size[1])),
+            # The band has to CONTAIN the line, not hug it: `anchor_window` finds the ink's
+            # own top row inside it and cuts from there, so a row of slack costs nothing
+            # while a row short of the ascenders loses the top of every glyph.
+            message_band=(int(pen_y) - 1, int(round(pen_y + g.seed_em)) + 1),
+            font_path=font_path,
+            # ROUNDED UP, not to nearest, and the difference decides whether anything is
+            # read at all. The computed value is 24.958 / 21.720 / 18.100 at the three sizes
+            # that were measured by hand, whose answers are 25 / 22 / 19: rounding to nearest
+            # gets two and misses the third, rounding up gets all three. The miss is not a
+            # near miss — at 18 against a true 19, twelve real lines scored 0.37 and NONE was
+            # accepted, where 19 took all twelve at 0.87.
+            #
+            # Fitted to three points, so treat it as the best seed available rather than a
+            # law. Two independent things point the same way: a line's measured extent runs
+            # about half a pixel over its true one, because anti-aliasing widens both ends and
+            # only one is subtracted, and rounding up is what that bias implies.
+            font_size=max(1, math.ceil(g.seed_em)),
+            offset=(0, 0),
+            calibration_score=0.0,
+            letter_spacing=0.0,
+            text_x0=int(round(pen_x)),
+            locale=locale,
+        )
+        # The columns are not stored: `read_columns` mirrors `text_x0` about the frame's
+        # centre, and that agrees with the computed wrap width to within a few pixels at
+        # every size checked. One source for a number beats two that can drift apart.
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(json.dumps(asdict(self), ensure_ascii=False, indent=1), encoding="utf-8")

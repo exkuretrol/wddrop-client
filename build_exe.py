@@ -97,14 +97,31 @@ RUNTIME_IMPORTS = [
     # source folder on --paths and had no place in this list; as an installed dependency
     # it needs one, and the URL has to be here rather than the bare name, which no index
     # can resolve.
-    ("wddrop_schema",
-     "wddrop-schema @ https://github.com/exkuretrol/wddrop-schema/archive/refs/tags/v0.1.0.tar.gz",
+    ("wddrop_schema", None,     # READ FROM pyproject.toml — see schema_requirement()
      "the wire format — the client cannot build a record, so nothing is recorded at all"),
     ("UnityPy", "UnityPy", "reading the game's own font: no atlas can be built"),
     (WINDOW_CAPTURE, "windows-capture",
      "reading the game WINDOW: capture falls back to the screen, and anything in front of "
      "the game is read instead of it"),
 ]
+
+
+def schema_requirement() -> str:
+    """The wire format's pin, read from the package that declares it.
+
+    It used to be written out here as well, and the two drifted the moment the pin moved: the
+    build would have fetched a tag older than the one the client is built against, and the
+    exe would have rejected records the server accepts — on a version number, with nothing in
+    the build output saying so. One pin, one place.
+    """
+    text = (Path(__file__).resolve().parent / "client" / "pyproject.toml").read_text(
+        encoding="utf-8")
+    for line in text.splitlines():
+        stripped = line.strip().strip(",").strip('"')
+        if stripped.startswith("wddrop-schema @"):
+            return stripped
+    raise SystemExit("[!] client/pyproject.toml no longer declares wddrop-schema; this build "
+                     "cannot guess which version of the wire format to fetch.")
 
 
 def entry_script(target: Path) -> Path:
@@ -402,7 +419,8 @@ def main(argv: list[str] | None = None) -> int:
         # Exists so a build workflow does not keep a second copy of this list. It kept one,
         # the two drifted, and the exe would have shipped without the module that reads the
         # game's own window.
-        print("\n".join(install for _module, install, _why in RUNTIME_IMPORTS))
+        print("\n".join(install or schema_requirement()
+                         for _module, install, _why in RUNTIME_IMPORTS))
         return 0
 
     # The interpreter that gets bundled, checked BEFORE anything is built. `uv run` picks
@@ -445,7 +463,8 @@ def main(argv: list[str] | None = None) -> int:
         print("\n    " + " ".join(
             ["uv run", f"--python {'.'.join(map(str, PYTHON_FLOOR))}", "--with pyinstaller"]
             # Quoted: `>=` is a redirection to every shell this is pasted into.
-            + [f'--with "{install}"' for _m, install, _w in RUNTIME_IMPORTS]
+            + [f'--with "{install or schema_requirement()}"'
+               for _m, install, _w in RUNTIME_IMPORTS]
             + ["build_exe.py"]))
         return 1
 

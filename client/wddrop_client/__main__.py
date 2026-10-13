@@ -625,6 +625,38 @@ def _select_profile(args, size=None):
                          ProfileStore.key_for(size), ProfileStore.key_for(source_size), scale)
                 _warn_if_the_game_renders_smaller(source_size)
                 return picked
+        # NOTHING FITS, SO COMPUTE ONE. The arrangement on screen is the same at every size,
+        # scaled to the frame, so the band's position and the columns it is written in follow
+        # from the frame size. That turns what used to be a dead end — "set the game to one of
+        # three resolutions" — into a read, for any size.
+        #
+        # It is deliberately LAST. A fit that was tested on real recordings beats a computed
+        # one, so the three shipped sizes never reach here, and neither does a player's own
+        # calibration. This is for the sizes that had nothing at all.
+        #
+        # The size it computes is a starting point rather than a measurement, and at one known
+        # size it lands a pixel under what actually reads. A pixel out does not read wrong
+        # names: it scores far below the acceptance gates, so the line is refused and shows up
+        # as unread. That is the safe direction, and it is why this ships before the run-time
+        # refinement that will sweep a pixel either side.
+        reference = shipped.get((1920, 1080)) or next(iter(shipped._profiles.values()), None)
+        if reference is not None:
+            try:
+                computed = Profile.derived(size, font_path=reference.font_path,
+                                           locale=reference.locale)
+            except ValueError as exc:         # a frame shape this cannot speak for
+                log.debug("wddrop: no computed geometry for %s: %s",
+                          ProfileStore.key_for(size), exc)
+            else:
+                log.warning(
+                    "wddrop: no calibration for %s, so its geometry was COMPUTED from the "
+                    "frame size (band %s, text at x=%d, %dpx). This has not been checked "
+                    "against a recording at this size: if lines come back unread, the size "
+                    "is the thing to doubt.",
+                    ProfileStore.key_for(size), computed.message_band, computed.text_x0,
+                    computed.font_size)
+                return computed
+
         # WHAT TO DO ABOUT IT DEPENDS ON WHO IS READING. In a build that offers calibration
         # the answer is to calibrate; in a player's build it is not offered at all, and
         # telling them to run a command that is not there — in a window with no console —

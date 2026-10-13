@@ -225,27 +225,54 @@ def test_a_size_nothing_ships_for_still_uses_the_players_own(tmp_path, monkeypat
     assert chosen.font_size == 99
 
 
-def test_a_resolution_with_neither_is_refused_with_both_lists(tmp_path, monkeypatch):
-    """Silently capturing at the wrong calibration is how a session records nothing and
-    leaves the cause to be guessed at."""
+def test_a_resolution_with_neither_is_computed_rather_than_refused(tmp_path, monkeypatch):
+    """This used to raise, and the reason it raised still stands — it has just moved.
+
+    The refusal existed because "silently capturing at the wrong calibration is how a session
+    records nothing and leaves the cause to be guessed at", and that is a real failure: at a
+    size whose font is one pixel out, twelve real lines scored 0.37 and NOT ONE was accepted,
+    where the right size took all twelve at 0.87. A wrong size records nothing.
+
+    What changed is the alternative. Refusing meant a player at any other size could not use
+    the client at all, for the three sizes someone had measured by hand. The geometry can be
+    computed instead, and the computed size matches all three measured ones exactly — so the
+    likely outcome is a working read rather than a dead end.
+
+    The guard the refusal provided is kept as a WARNING that names the size, the band and the
+    font size it computed, so a session that records nothing still says where to look. That is
+    what this asserts: not that it proceeds, but that it does not proceed silently.
+    """
     monkeypatch.setenv("WDDROP_HOME", str(tmp_path))
+    import logging
     from types import SimpleNamespace
 
     from wddrop_client import __main__ as cli
 
-    with pytest.raises(SystemExit) as exc:
-        cli._select_profile(SimpleNamespace(data=str(tmp_path)), (1234, 567))
-    assert "1234x567" in str(exc.value) and "Shipped" in str(exc.value)
+    records = []
+    handler = logging.Handler()
+    handler.emit = records.append
+    log = logging.getLogger("wddrop")
+    log.addHandler(handler)
+    try:
+        profile = cli._select_profile(SimpleNamespace(data=str(tmp_path), locale="ja"),
+                                      (1234, 567))
+    finally:
+        log.removeHandler(handler)
+
+    assert profile is not None, "a size with no fit should now be computed, not refused"
+    assert tuple(profile.frame_size) == (1234, 567)
+    assert profile.calibration_score == 0.0, "a computed profile must not claim to be scored"
+    warned = [r for r in records if r.levelno >= logging.WARNING]
+    assert warned, "proceeding on computed geometry has to say so"
+    said = warned[0].getMessage()
+    assert "1234x567" in said and str(profile.font_size) in said, said
 
 
-def test_a_players_build_is_told_what_it_can_actually_do_about_it(tmp_path, monkeypatch):
-    """The same refusal, worded for someone whose client does not offer calibration.
-
-    `wddrop calibrate` is a command in a window with no console, in a build where the button
-    is not there either — instructions that cannot be carried out, which is worse than the
-    bare fact. What a player CAN do is set the game's own resolution to one the client ships
-    a fit for, so that is what it says.
-    """
+def test_a_frame_shape_the_geometry_cannot_speak_for_is_still_refused(tmp_path, monkeypatch):
+    """The dead end is not gone, it is narrower. A frame far taller than it is wide has a
+    usable area that is inset by more than the frame reports, by an amount the client does
+    not carry — so it refuses rather than return a plausible answer tens of pixels out, and
+    the refusal still tells a player which sizes do work."""
     monkeypatch.setenv("WDDROP_HOME", str(tmp_path))
     from types import SimpleNamespace
 
@@ -254,9 +281,9 @@ def test_a_players_build_is_told_what_it_can_actually_do_about_it(tmp_path, monk
 
     monkeypatch.setattr(config, "in_development", lambda: False)
     with pytest.raises(SystemExit) as exc:
-        cli._select_profile(SimpleNamespace(data=str(tmp_path), locale="ja"), (1234, 567))
+        cli._select_profile(SimpleNamespace(data=str(tmp_path), locale="ja"), (1080, 2424))
     said = str(exc.value)
-    assert "1234x567" in said
+    assert "1080x2424" in said
     assert "calibrat" not in said.lower(), said
     assert "1920x1080" in said, "the sizes it CAN read, which are game settings"
 
