@@ -132,3 +132,25 @@ def test_a_wrapped_line_is_judged_against_its_own_frame():
     # ... while a pair that is weak in absolute terms is still refused.
     assert 0.55 < max(SEPARATOR_MIN_SCORE, 0.62 * TAIL_FOLLOWS_SEPARATOR)
     assert SEPARATOR_STRONG == 0.85, "the separator's own bar is unchanged"
+
+
+def test_a_line_that_wraps_inside_the_wording_is_still_terminated():
+    """The ×1 tier was unreadable, forever, and it did not look like an error.
+
+    `_cut_at_a_wrapped_separator` cuts at the 「×」, so it cannot see a line with no quantity at
+    all. When such a line wraps INSIDE the wording — 「…のガラクタを手に」 / 「入れた!!」 — the
+    full 「を手に入れた!!」 is never on one row, so the proof that the typing finished never
+    arrives and every frame returns UNTERMINATED. A caller waiting for another frame waits for
+    all of them. Measured on a bot run: every long junk name without a quantity.
+
+    The signature is a row ENDING with a prefix of the wording, which is why the match has to
+    sit at the end of the ink: a prefix with more ink to its right is a particle inside a name,
+    and 「を」 is a particle. Hence a two-character minimum as well.
+    """
+    from wddrop_client.capture.glyph import MIN_WRAPPED_TAIL_CHARS, _tail_prefixes
+
+    assert MIN_WRAPPED_TAIL_CHARS >= 2, "one character of tail is not evidence of a wrap"
+    longest_first = list(_tail_prefixes("を手に入れた!!"))
+    assert longest_first[0] == "を手に入れた!!"
+    assert longest_first[-1] == "を"
+    assert len(longest_first[0]) > len(longest_first[-1]), "longest first, so a coincidence loses"

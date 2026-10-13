@@ -891,6 +891,49 @@ SEPARATOR_STRONG = 0.85
 TAIL_FOLLOWS_SEPARATOR = 0.85
 
 
+#: How much of the wording must be on this row before a wrap is believed without a separator.
+#: One character is not enough — 「を」 is a particle and appears inside names — so the cut needs
+#: enough of the tail that nothing else in the vocabulary could be mistaken for it.
+MIN_WRAPPED_TAIL_CHARS = 2
+
+
+def _cut_at_a_wrapped_tail(window, renderer, suffix: str, dy: int):
+    """Mask a line that wrapped INSIDE the wording, with no quantity to anchor on.
+
+    `_cut_at_a_wrapped_separator` needs an 「×」 to cut at, so it cannot see this case at all: a
+    line with no quantity has no separator, and when the wrap falls inside the wording itself —
+    「…のガラクタを手に」 / 「入れた!!」 — the full tail is never on one row and the line is
+    UNTERMINATED on every frame of it, forever. Measured on a bot's run: every long junk name
+    WITHOUT a quantity, which is the whole ×1 tier of the dungeon-named series.
+
+    The signature is that the row ENDS with a prefix of the wording. Longest first, because a
+    longer prefix cannot be a coincidence and a shorter one can; and the match has to sit at
+    the end of the ink, since a prefix found with more ink to its right is a particle inside a
+    name rather than a line that ran out of row.
+    """
+    np = _np()
+    box = ink_bbox(window)
+    if box is None:
+        return window, None
+    ink_right = box[2]
+    for prefix in _tail_prefixes(suffix):
+        if len(prefix) < MIN_WRAPPED_TAIL_CHARS:
+            break
+        shape = _hcrop(renderer.render(prefix))
+        if shape is None or shape.shape[1] >= window.shape[1]:
+            continue
+        got, at = _slide(window, shape, MIN_NAME_PX, window.shape[1] - shape.shape[1], dy)
+        if at is None or got < SEPARATOR_STRONG or at < MIN_NAME_PX:
+            continue
+        # It must END the row. Anything beyond it means the wording is not what ran out.
+        if abs((at + shape.shape[1]) - ink_right) > shape.shape[1] // len(prefix):
+            continue
+        masked = np.asarray(window, dtype=float).copy()
+        masked[:, at:] = 0.0
+        return masked, at
+    return window, None
+
+
 def _cut_at_a_wrapped_separator(window, renderer, suffix: str, separator: str, dy: int):
     """Mask a line whose wording wrapped onto a row this window cannot see.
 
@@ -990,7 +1033,12 @@ def mask_after_name(window, renderer, suffix: str, separator: str = "×",
         # that this IS a wrapped line rather than a stroke inside a name: the 「×」 must be
         # unmistakable AND the wording's first character must follow it within a few digits'
         # width — which is exactly where the quantity reader already looks for it.
-        return _cut_at_a_wrapped_separator(window, renderer, suffix, separator, dy)
+        masked, cut = _cut_at_a_wrapped_separator(window, renderer, suffix, separator, dy)
+        if cut is not None:
+            return masked, cut
+        # STILL NOTHING, and a line with no quantity never had a separator to find. The wrap
+        # may have fallen inside the wording itself, which leaves a prefix of it ending the row.
+        return _cut_at_a_wrapped_tail(window, renderer, suffix, dy)
 
     cut = at
     sep = _hcrop(renderer.render(separator)) if separator else None
