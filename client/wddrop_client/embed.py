@@ -38,7 +38,10 @@ if TYPE_CHECKING:                                   # pragma: no cover
     from .calibration import Profile
 
 __all__ = ["Geometry", "Refusal", "DropLine", "EmptyChest", "Refused", "LineReader",
-           "read_drop_line", "Recorder", "DiveHandle"]
+           "read_drop_line", "Recorder", "DiveHandle", "DEFAULT_FACE"]
+
+#: The face this screen is drawn in. See `Geometry.font_path` for what the other one costs.
+DEFAULT_FACE = "atlas.ja.scenario.json"
 
 
 @dataclass(frozen=True)
@@ -58,10 +61,17 @@ class Geometry:
     columns: tuple[int, int]
     window: tuple[int, int]
     letter_spacing: float = 0.0
-    font_path: str = ""
+    #: THE TYPEFACE, which is part of the geometry and not a detail left to the caller.
+    #: The game ships a scenario twin of its UI font and this screen is drawn in the scenario
+    #: one. Reading it in the other costs about 0.1 of score and most of the margin — measured
+    #: over 208 real frames, the right face read 0.8724 against 0.7603, with mean margin
+    #: 0.3149 against 0.2009 — and a whole class of long names fell under the margin gate
+    #: because of it. It was a free parameter on both sides, which is exactly how it got
+    #: picked wrong and stayed wrong without ever looking broken.
+    font_path: str = DEFAULT_FACE
 
     @classmethod
-    def for_window(cls, frame_size, *, locale: str = "ja", font_path: str | None = None,
+    def for_window(cls, frame_size, *, locale: str = "ja", font_path: str = DEFAULT_FACE,
                    windows: bool = True, safe_area=None) -> "Geometry":
         """Computed from the window size alone — no calibration step for the caller.
 
@@ -72,7 +82,7 @@ class Geometry:
         """
         from .calibration import Profile
 
-        p = Profile.derived(frame_size, font_path=font_path or "", locale=locale,
+        p = Profile.derived(frame_size, font_path=font_path or DEFAULT_FACE, locale=locale,
                             windows=windows, safe_area=safe_area)
         return cls.from_profile(p)
 
@@ -158,13 +168,17 @@ class LineReader:
     #: chest empty is recording an outcome, and the cost of a false one is a fabricated zero.
     EMPTY_MIN_SCORE = 0.70
 
-    def __init__(self, geometry: Geometry, names: list[str], atlas_path, *,
+    def __init__(self, geometry: Geometry, names: list[str], atlas_path=None, *,
                  after: str = "を手に入れた!!", quantity_mark: str = "×",
                  empty_text: str | None = None):
         from .capture import glyph as g
 
         self._g = g
         self.geometry = geometry
+        # THE GEOMETRY'S FACE unless the caller insists. Passing one here that disagrees with
+        # the geometry is how the wrong typeface was used for a whole run without anything
+        # looking broken — the names still read, a tenth lower, and the long ones stopped.
+        atlas_path = atlas_path or geometry.font_path or DEFAULT_FACE
         self.after = after
         self.quantity_mark = quantity_mark
         window = g.required_window(

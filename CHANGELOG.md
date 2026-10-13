@@ -43,15 +43,15 @@ cannot play at this size".
 
 ### Known limits
 
-- **The text SIZE is computed too, and it is the part with the least behind it.** The computed
-  value is rounded UP rather than to nearest, which is what makes it match all three measured
-  sizes exactly; rounding to nearest matched two and missed the third. The miss is not a near
-  miss — at a size one pixel under, twelve real lines scored 0.37 and none was accepted, where
-  the right size took all twelve at 0.87. **A size that is one pixel out reads nothing at all.**
+- **The text SIZE is computed too, and it is the part with the least behind it.** The size that
+  reads is about half a pixel over the size drawn, because anti-aliasing widens ink at both
+  ends, so the computed value has that half pixel added before it is rounded. That matches all
+  four sizes anyone has measured, across two platforms. **A size one pixel out reads nothing at
+  all** — not fewer items, none: at a pixel under, twelve real lines scored 0.37 with none
+  accepted, where the right size took all twelve at 0.87.
 - So if a newly supported window size records nothing, the size is the thing to doubt, not the
-  position. Rounding up is fitted to the three sizes that have been measured, and a fourth
-  could still land the other way. The three measured sizes keep their measured fits and are
-  unaffected either way.
+  position. Four points is not a law, and a fifth could land the other way. The sizes that were
+  measured by hand keep their measured fits and are unaffected either way.
 - **Windows the client never sees** — far taller than they are wide — are refused rather than
   guessed at, because their usable area is inset by more than the window reports.
 

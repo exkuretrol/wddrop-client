@@ -46,6 +46,24 @@ def test_it_lands_on_the_shipped_fits_without_having_seen_them():
         assert 0 < prof["text_x0"] - g.pen[0] < 8, f"{key}: left edge is not a bearing away"
 
 
+def test_the_phone_size_is_not_reachable_by_rounding_up():
+    """The fourth measurement, and the one that broke the previous rule.
+
+    A phone has no window scale, so its computed size is an EXACT 43.000 — and the size that
+    reads best there is 44. `ceil` cannot lift an exact integer, so it gets three of the four
+    viewports; adding the half-pixel bias first gets all four. This test exists because the
+    obvious simplification back to `ceil` passes the other three.
+    """
+    from wddrop_client.capture.derive import band_geometry
+
+    g = band_geometry((1080, 2424), windows=False,
+                      safe_area=(0, 252.21, 1080, 2344.79 - 252.21))
+    assert g.seed_em == pytest.approx(43.0, abs=0.001), "the phone's em is an exact integer"
+    p = Profile.derived((1080, 2424), font_path="x", windows=False,
+                        safe_area=(0, 252.21, 1080, 2344.79 - 252.21))
+    assert p.font_size == 44, "measured: 69 reads at 44 against 60 at 43 over 208 frames"
+
+
 def test_the_computed_size_equals_every_measured_one():
     """EQUAL, at all three, and only because the rounding goes up.
 

@@ -283,18 +283,28 @@ class Profile:
             # while a row short of the ascenders loses the top of every glyph.
             message_band=(int(pen_y) - 1, int(round(pen_y + g.seed_em)) + 1),
             font_path=font_path,
-            # ROUNDED UP, not to nearest, and the difference decides whether anything is
-            # read at all. The computed value is 24.958 / 21.720 / 18.100 at the three sizes
-            # that were measured by hand, whose answers are 25 / 22 / 19: rounding to nearest
-            # gets two and misses the third, rounding up gets all three. The miss is not a
-            # near miss — at 18 against a true 19, twelve real lines scored 0.37 and NONE was
-            # accepted, where 19 took all twelve at 0.87.
+            # THE SIZE THAT READS BEST, which is about half a pixel over the size drawn.
+            # Anti-aliasing widens ink at both ends while a template is measured from one, so
+            # the template that matches is a little larger than the glyphs actually are. The
+            # estimate of it is `floor(em + 1)`.
             #
-            # Fitted to three points, so treat it as the best seed available rather than a
-            # law. Two independent things point the same way: a line's measured extent runs
-            # about half a pixel over its true one, because anti-aliasing widens both ends and
-            # only one is subtracted, and rounding up is what that bias implies.
-            font_size=max(1, math.ceil(g.seed_em)),
+            # Measured, four viewports, two platforms:
+            #
+            #     derived   reads best
+            #      24.958      25        1241-tall window
+            #      21.720      22        1920x1080
+            #      18.100      19        1600x900
+            #      43.000      44        a phone, where there is no window scale at all
+            #
+            # Rounding to nearest misses the third; rounding UP misses the fourth, because a
+            # phone's value is an exact integer and ceil cannot lift one. Adding the half
+            # pixel first gets all four, and it is the bias stated rather than a rule fitted
+            # to the misses.
+            #
+            # It is still four points. What makes the cost asymmetric is that a size one pixel
+            # LOW reads nothing at all — twelve real lines scored 0.37 with none accepted,
+            # against 0.87 and all twelve at the right size — so when in doubt this errs high.
+            font_size=max(1, math.floor(g.seed_em + 1.0)),
             offset=(0, 0),
             calibration_score=0.0,
             letter_spacing=0.0,
