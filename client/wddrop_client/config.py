@@ -461,11 +461,20 @@ class ClientConfig:
     consent: ConsentState = field(default_factory=ConsentState)
 
     @classmethod
-    def load(cls) -> "ClientConfig":
-        path = config_dir() / "config.json"
+    def load(cls, directory=None) -> "ClientConfig":
+        """`directory` reads a config somewhere other than this machine's own.
+
+        It exists so a second capture source on one machine — a bot embedding this client —
+        can hold its OWN install_id rather than borrowing the player's. The install_id is the
+        handle a player gives to have their data erased, so one shared between two sources
+        means an erasure request covers rows they never knew were theirs.
+        """
+        base = Path(directory) if directory is not None else config_dir()
+        base.mkdir(parents=True, exist_ok=True)
+        path = base / "config.json"
         if not path.exists():
             cfg = cls()
-            cfg.save()
+            cfg.save(directory=base)
             return cfg
         raw = json.loads(path.read_text(encoding="utf-8"))
         # The GAME language is no longer stored: it is Japanese. A value left by an older
@@ -487,7 +496,9 @@ class ClientConfig:
             log.warning("wddrop: ignoring unknown config setting(s): %s", ", ".join(sorted(unknown)))
         return cls(**{k: v for k, v in raw.items() if k in cls.__dataclass_fields__})
 
-    def save(self) -> None:
-        path = config_dir() / "config.json"
+    def save(self, directory=None) -> None:
+        base = Path(directory) if directory is not None else config_dir()
+        base.mkdir(parents=True, exist_ok=True)
+        path = base / "config.json"
         data = asdict(self)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")

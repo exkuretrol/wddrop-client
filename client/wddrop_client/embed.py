@@ -331,7 +331,12 @@ class Recorder:
         """
         from .config import ClientConfig
 
-        self.config = config or ClientConfig.load()
+        # FROM data_dir WHEN ONE IS GIVEN. Loading the machine's own config here would have
+        # handed the bot the PLAYER's install_id while writing its records elsewhere — which
+        # is the half of the separation that matters, and the half this got wrong until
+        # wd-autopilot noticed the player's config being read.
+        self.config = config or ClientConfig.load(
+            directory=Path(data_dir) if data_dir is not None else None)
         self.capture_mode = capture_mode
         self.locale = locale
         base = Path(data_dir) if data_dir is not None else None

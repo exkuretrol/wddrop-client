@@ -885,6 +885,10 @@ MIN_NAME_PX = 8
 # 「モニヨン銀貨を手に入れた!!」 cut at 87px, mid-name, and read as nothing. Nothing else about
 # that item is unusual; it is simply which kana it happens to be spelled with.
 SEPARATOR_STRONG = 0.85
+# How well the wording's first character must match RELATIVE to the separator beside it, when
+# deciding a line wrapped. See `_cut_at_a_wrapped_separator`: an absolute bar here rejected a
+# real wrap on a platform that simply draws fainter.
+TAIL_FOLLOWS_SEPARATOR = 0.85
 
 
 def _cut_at_a_wrapped_separator(window, renderer, suffix: str, separator: str, dy: int):
@@ -918,7 +922,15 @@ def _cut_at_a_wrapped_separator(window, renderer, suffix: str, separator: str, d
     digits = [s for _d, s in _digit_shapes(renderer) if s is not None]
     reach = sep.shape[1] + MAX_DIGITS * (max((s.shape[1] for s in digits), default=0) + 4) + 8
     seen, _at = _slide(window, shape, sep_x, sep_x + reach, dy)
-    if seen < SEPARATOR_STRONG:
+    # JUDGED AGAINST THE SEPARATOR ON THIS FRAME, not against a number measured on another.
+    # SEPARATOR_STRONG was fitted to Windows captures, and the same text on a phone reads
+    # lower throughout — names at 0.75-0.80 where Windows gives 0.88-0.92. A real wrapped
+    # line was rejected there by 0.043: the 「×」 scored 0.946 and the 「を」 0.808, both plainly
+    # present, one of them under a threshold set somewhere else. The two glyphs are measured
+    # by the same instrument on the same pixels, so their RATIO survives a change of platform
+    # where the absolute level does not; the floor keeps a weak pair from passing on ratio
+    # alone.
+    if seen < max(SEPARATOR_MIN_SCORE, got * TAIL_FOLLOWS_SEPARATOR):
         return window, None
     masked = np.asarray(window, dtype=float).copy()
     masked[:, sep_x:] = 0.0

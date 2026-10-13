@@ -88,3 +88,25 @@ def test_a_derived_profile_covers_a_size_that_ships_no_fit():
     assert not any(tuple(p["frame_size"]) == (1366, 768) for p in SHIPPED.values())
     p = Profile.derived((1366, 768), font_path="atlas.ja.scenario.json")
     assert p.font_size > 0 and p.text_x0 > 0
+
+
+def test_a_wrapped_line_is_judged_against_its_own_frame():
+    """A real wrapped line was rejected by 0.043 on a threshold measured elsewhere.
+
+    `_cut_at_a_wrapped_separator` asks two questions: is the 「×」 unmistakable, and does the
+    wording's first character follow it. Both were fitted on Windows captures, where this text
+    reads 0.88-0.92; the same game on a phone reads 0.75-0.80 throughout. On a real frame —
+    「…のガラクタ×3を手」 wrapping before 「に入れた!!」 — the 「×」 scored 0.946 and the 「を」 0.808,
+    both plainly there, and the 「を」 fell under an absolute 0.85 that belonged to another
+    platform. Judging it against the separator beside it, measured by the same instrument on
+    the same pixels, survives that; the floor stops a weak pair passing on ratio alone.
+    """
+    from wddrop_client.capture.glyph import (SEPARATOR_MIN_SCORE, SEPARATOR_STRONG,
+                                             TAIL_FOLLOWS_SEPARATOR)
+
+    assert TAIL_FOLLOWS_SEPARATOR < 1.0, "the tail may read a little under the separator"
+    # The frame that prompted this: a separator at 0.946 must admit a 「を」 at 0.808 ...
+    assert 0.808 >= max(SEPARATOR_MIN_SCORE, 0.946 * TAIL_FOLLOWS_SEPARATOR)
+    # ... while a pair that is weak in absolute terms is still refused.
+    assert 0.55 < max(SEPARATOR_MIN_SCORE, 0.62 * TAIL_FOLLOWS_SEPARATOR)
+    assert SEPARATOR_STRONG == 0.85, "the separator's own bar is unchanged"
