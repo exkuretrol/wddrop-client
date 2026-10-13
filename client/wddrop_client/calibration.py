@@ -283,10 +283,18 @@ class Profile:
             # while a row short of the ascenders loses the top of every glyph.
             message_band=(int(pen_y) - 1, int(round(pen_y + g.seed_em)) + 1),
             font_path=font_path,
-            # THE SIZE THAT READS BEST, which is about half a pixel over the size drawn.
-            # Anti-aliasing widens ink at both ends while a template is measured from one, so
-            # the template that matches is a little larger than the glyphs actually are. The
-            # estimate of it is `floor(em + 1)`.
+            # THE SIZE THAT READS BEST, which is not the size drawn and does not differ from
+            # it by any constant anyone has found.
+            #
+            # This said "about half a pixel over, because anti-aliasing widens ink at both
+            # ends". That explanation is WITHDRAWN. Measuring the advance between glyphs —
+            # which edge dilation cannot bias, unlike a width — against the template size that
+            # actually reads gives +0.18 at 1600x900, -0.46 at 1920x1080 and +0.8 on a phone.
+            # Not constant in size, and not even in sign. A mechanism that predicts one
+            # direction cannot be behind that.
+            #
+            # What is left is the arithmetic and the reason to prefer it, which never rested
+            # on the mechanism:
             #
             # Measured, four viewports, two platforms:
             #
@@ -297,13 +305,14 @@ class Profile:
             #      43.000      44        a phone, where there is no window scale at all
             #
             # Rounding to nearest misses the third; rounding UP misses the fourth, because a
-            # phone's value is an exact integer and ceil cannot lift one. Adding the half
-            # pixel first gets all four, and it is the bias stated rather than a rule fitted
-            # to the misses.
+            # phone's value is an exact integer and ceil cannot lift one. `floor(em + 1)` gets
+            # all four — as a FIT to four points, which is all it has ever been.
             #
-            # It is still four points. What makes the cost asymmetric is that a size one pixel
-            # LOW reads nothing at all — twelve real lines scored 0.37 with none accepted,
-            # against 0.87 and all twelve at the right size — so when in doubt this errs high.
+            # WHAT ACTUALLY JUSTIFIES IT is the asymmetry, which needs no mechanism: a size one
+            # pixel LOW reads nothing at all — twelve real lines scored 0.37 with none
+            # accepted, against 0.87 and all twelve at the right size — while one pixel high
+            # merely scores worse. So a caller sweeps a pixel either side of this and keeps
+            # what reads; this is where to start, not an answer.
             font_size=max(1, math.floor(g.seed_em + 1.0)),
             offset=(0, 0),
             calibration_score=0.0,

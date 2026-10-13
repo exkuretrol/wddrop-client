@@ -62,6 +62,10 @@ def test_the_phone_size_is_not_reachable_by_rounding_up():
     p = Profile.derived((1080, 2424), font_path="x", windows=False,
                         safe_area=(0, 252.21, 1080, 2344.79 - 252.21))
     assert p.font_size == 44, "measured: 69 reads at 44 against 60 at 43 over 208 frames"
+    # NOT because of a half-pixel bias — that explanation is withdrawn. The advance between
+    # glyphs, which edge dilation cannot bias, sits +0.18 from the reading size at 1600x900,
+    # -0.46 at 1920x1080 and +0.8 here: no constant, not even a constant sign. This is a fit
+    # to four points, kept because erring high is cheap and erring low reads nothing.
 
 
 def test_the_computed_size_equals_every_measured_one():
