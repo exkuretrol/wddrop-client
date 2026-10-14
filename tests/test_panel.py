@@ -95,8 +95,8 @@ def test_the_panel_reads_back_at_the_derived_size():
 
     from wddrop_client.capture.glyph import RenderRecognizer, anchor_window, make_renderer
 
-    vocab_path = ROOT / "data" / "vocab.zh_tw.json"
-    atlas = ROOT / "data" / "atlas.zh_tw.json"
+    vocab_path = ROOT / "data" / "vocab.ja.json"
+    atlas = ROOT / "data" / "atlas.ja.json"
     if not (vocab_path.exists() and atlas.exists()):
         pytest.skip("vocabularies/atlases not built")
     import json
@@ -122,17 +122,30 @@ def test_the_panel_reads_back_at_the_derived_size():
 
 
 def test_the_atlas_can_draw_the_mining_verb():
-    """「到」 occurs in no zh_tw item name, so it entered the atlas only once Common@GetItem
-    was listed as a template. Before that the renderer drew 「得 了…」 with a hole in it and
-    scored 0.40 instead of 0.91 — silently, because nothing knew the character was wanted."""
+    """The verb comes from Common@GetItem, not from any item name, so it reaches the atlas
+    only because the templates are listed as a source. Before they were, the renderer drew the
+    wording with holes in it and scored 0.40 instead of 0.91 — silently, because nothing knew
+    the characters were wanted.
+
+    Read from the vocabulary's own template rather than hardcoded: the characters differ per
+    language (zh_tw 「得到了」, ja 「入手した」), and a literal here tests the wrong language the
+    moment the built locale changes — which is exactly how it broke.
+    """
     import json
 
-    atlas = ROOT / "data" / "atlas.zh_tw.json"
-    if not atlas.exists():
+    atlas = ROOT / "data" / "atlas.ja.json"
+    vocab_path = ROOT / "data" / "vocab.ja.json"
+    if not (atlas.exists() and vocab_path.exists()):
         pytest.skip("atlas not built")
     index = json.loads(atlas.read_text(encoding="utf-8"))["index"]
-    for ch in "得到了。":
-        assert ch in index, f"{ch!r} missing from the atlas"
+    templates = json.loads(vocab_path.read_text(encoding="utf-8")).get("templates") or {}
+    wording = "".join(templates.values())
+    assert wording, "the vocabulary carries no templates to check"
+    import re
+    for ch in sorted(set(re.sub(r"<[^>]+>|\{\d+\}", "", wording))):
+        if ch.isspace():
+            continue
+        assert ch in index, f"{ch!r} is in a template but missing from the atlas"
 
 
 def test_live_capture_actually_grabs_the_panel():
@@ -177,7 +190,7 @@ def test_a_one_character_rival_is_separated_by_the_columns_that_differ():
     """
     from wddrop_client.capture.glyph import break_tie, discriminating_columns, make_renderer
 
-    atlas = ROOT / "data" / "atlas.zh_tw.json"
+    atlas = ROOT / "data" / "atlas.ja.json"
     if not atlas.exists():
         pytest.skip("atlas not built")
     r = make_renderer(str(atlas), 25, (520, 27), 0.0)
@@ -200,7 +213,7 @@ def test_identical_candidates_are_not_decided_by_iteration_order():
     margin is honest, quietly preferring the first is not."""
     from wddrop_client.capture.glyph import break_tie, make_renderer
 
-    atlas = ROOT / "data" / "atlas.zh_tw.json"
+    atlas = ROOT / "data" / "atlas.ja.json"
     if not atlas.exists():
         pytest.skip("atlas not built")
     r = make_renderer(str(atlas), 25, (520, 27), 0.0)
@@ -218,8 +231,8 @@ def test_the_window_must_not_reach_into_the_next_panel_line():
 
     from wddrop_client.capture.glyph import RenderRecognizer, anchor_window, make_renderer
 
-    vocab_path = ROOT / "data" / "vocab.zh_tw.json"
-    atlas = ROOT / "data" / "atlas.zh_tw.json"
+    vocab_path = ROOT / "data" / "vocab.ja.json"
+    atlas = ROOT / "data" / "atlas.ja.json"
     if not (vocab_path.exists() and atlas.exists()):
         pytest.skip("data not built")
     raw = json.loads(vocab_path.read_text(encoding="utf-8"))
@@ -296,7 +309,7 @@ def test_a_tie_is_only_broken_when_the_winner_actually_fits():
     from wddrop_client.capture.glyph import break_tie, make_renderer
     from wddrop_client.runner import MINING_TIE_MARGIN, MINING_TIE_MIN_SCORE
 
-    atlas = ROOT / "data" / "atlas.zh_tw.json"
+    atlas = ROOT / "data" / "atlas.ja.json"
     if not atlas.exists():
         pytest.skip("atlas not built")
     r = make_renderer(str(atlas), 25, (520, 27), 0.0)
@@ -354,7 +367,7 @@ def _shipped_profile():
         letter_spacing=1.1, window=(749, 51), text_x0=91, locale="zh_tw",
         panel_font_size=24, panel_letter_spacing=1.1,
         panel_data_version="b5b4fab0494322eb")
-    atlas = ROOT / "data" / "atlas.zh_tw.json"
+    atlas = ROOT / "data" / "atlas.ja.json"
     if not atlas.exists():
         pytest.skip("atlas not built")
     profile.font_path = str(atlas)

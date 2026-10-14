@@ -80,7 +80,7 @@ def test_migrating_from_the_folder_it_already_uses_does_nothing(home):
 def test_data_files_are_not_treated_as_state(home, tmp_path):
     """Vocabularies and atlases ship with the program and are rebuilt from the game's own
     files. Dragging them into the player's folder would strand them when it is deleted."""
-    for name in ("vocab.zh_tw.json", "atlas.zh_tw.json", "catalog.zh_tw.json",
+    for name in ("vocab.ja.json", "atlas.ja.json", "catalog.zh_tw.json",
                  "boosts.json"):
         assert name not in STATE_FILES
 

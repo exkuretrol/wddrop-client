@@ -60,7 +60,7 @@ def test_full_width_punctuation_folds():
 def test_a_vocabulary_without_the_templates_disables_it(tmp_path):
     """Vocabularies built before mining existed simply turn the feature off — they must not
     crash, and they must not silently pretend to be watching."""
-    path = tmp_path / "vocab.zh_tw.json"
+    path = tmp_path / "vocab.ja.json"
     path.write_text(json.dumps({"locale": "zh_tw", "templates": {}, "items": []}),
                     encoding="utf-8")
     w = PickaxeWatch.from_vocab(path)
@@ -116,8 +116,8 @@ def test_a_drop_line_is_not_swallowed_by_the_pickaxe_index():
     where a lone survivor can win by default, so the gates have to hold."""
     pytest.importorskip("numpy")
     pytest.importorskip("PIL.Image")
-    vocab_path = ROOT / "data" / "vocab.zh_tw.json"
-    atlas = ROOT / "data" / "atlas.zh_tw.json"
+    vocab_path = ROOT / "data" / "vocab.ja.json"
+    atlas = ROOT / "data" / "atlas.ja.json"
     if not (vocab_path.exists() and atlas.exists()):
         pytest.skip("vocabularies/atlases not built")
 

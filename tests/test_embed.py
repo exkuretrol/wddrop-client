@@ -201,3 +201,60 @@ def test_lines_that_were_seen_but_never_read_are_counted():
     dive.chest([DropLine("落石の巻物", 1, 0.9, 0.1)])
     assert seen[0]["qc"]["unread_lines"] == 2
     assert "unread_lines" not in seen[1]["qc"], "a clean chest must not carry a zero"
+
+
+# -- the mining panel ------------------------------------------------------------------
+
+def test_the_tie_break_is_reachable_where_ties_actually_happen():
+    """The entry gate must not be HIGHER than the bar the tie-break itself accepts.
+
+    Graded families — 下級/中級/上級/特上級鉄鉱石 — differ by one character in five, so the
+    identical rest of the line drowns the difference and the whole-line score lands BELOW the
+    reading gate by construction. Gating entry to the tie-break at that same reading score
+    therefore excluded exactly the band it was built for.
+
+    Measured on a real panel frame: 上級鉄鉱石 scored 0.6082 with a 0.0189 margin over its
+    sibling 下級鉄鉱石 — the right name, refused — and the tie-break never ran, because
+    0.6082 was under a 0.70 entry gate while the tie-break accepts a fit of 0.60.
+    """
+    import inspect
+
+    from wddrop_client import embed
+
+    src = inspect.getsource(embed.PanelReader.read)
+    assert "match.score >= MINING_TIE_MIN_SCORE" in src, (
+        "the tie-break must be entered at its own bar, not at the whole-line reading gate")
+    assert embed.MINING_TIE_MIN_SCORE <= 0.70
+
+
+def test_a_panel_reader_takes_its_size_from_the_caller():
+    """No default size, because the drawn size is platform-dependent.
+
+    A 1080-wide phone draws this panel at 39 where the authored size is 40, and the Windows
+    factor for this prefab is unconfirmed. A default here would be one platform's measurement
+    presented as a derivation — which is how the chest band's 43 travelled across a platform
+    boundary it never claimed.
+    """
+    import inspect
+
+    from wddrop_client.embed import PanelReader
+
+    sig = inspect.signature(PanelReader.__init__)
+    assert sig.parameters["size"].default is inspect.Parameter.empty, (
+        "size must be required: it differs per platform and must not be guessed")
+    assert sig.parameters["columns"].kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_break_detection_is_off_unless_the_caller_asks():
+    """A false break is worse than a missed one, so it is opt-in.
+
+    An index of three candidates has almost nothing for a wrong answer to lose to: the same
+    index reported a pickaxe breaking TWICE in a session containing no mining at all, and the
+    true hit could not be separated from the false ones by score. A caller that counts breaks
+    for itself — as the bot does — should keep doing that.
+    """
+    import inspect
+
+    from wddrop_client.embed import PanelReader
+
+    assert inspect.signature(PanelReader.__init__).parameters["pickaxes"].default is None

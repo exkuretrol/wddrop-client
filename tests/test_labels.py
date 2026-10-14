@@ -34,7 +34,7 @@ def hints(tmp_path):
             {"id": 5401, "name": "試煉洞窟（青銅階）", "floors": []},
         ],
     }, ensure_ascii=False), encoding="utf-8")
-    (tmp_path / "vocab.zh_tw.json").write_text(json.dumps({
+    (tmp_path / "vocab.ja.json").write_text(json.dumps({
         "locale": "zh_tw",
         "items": [
             {"name": "北穿幽靈城的妖異冥刻雜物", "type": "Item::Junk"},
@@ -48,7 +48,7 @@ def hints(tmp_path):
         ],
         "equipment": [],
     }, ensure_ascii=False), encoding="utf-8")
-    return DungeonHints.load(tmp_path / "vocab.zh_tw.json")
+    return DungeonHints.load(tmp_path / "vocab.ja.json")
 
 
 def test_it_names_the_dungeon_the_junk_came_from(hints):
@@ -104,12 +104,12 @@ def test_the_check_survives_a_missing_catalogue(tmp_path):
     """
     from wddrop_client.dungeons import STUDY_DUNGEONS
 
-    (tmp_path / "vocab.zh_tw.json").write_text(json.dumps({
+    (tmp_path / "vocab.ja.json").write_text(json.dumps({
         "locale": "zh_tw", "equipment": [],
         "items": [{"name": "北穿幽靈城的乳白色雜物", "type": "Item::Junk"}],
     }, ensure_ascii=False), encoding="utf-8")
 
-    hints = DungeonHints.load(tmp_path / "vocab.zh_tw.json")
+    hints = DungeonHints.load(tmp_path / "vocab.ja.json")
     assert len(hints) == len(STUDY_DUNGEONS)
     # The junk names one dungeon and the label says another: that is the whole point of it.
     assert hints.check(2000, ["北穿幽靈城的乳白色雜物"]) == {
@@ -120,13 +120,13 @@ def test_the_check_survives_a_missing_catalogue(tmp_path):
 
 def test_a_vocabulary_with_no_junk_finds_nothing_to_check(tmp_path):
     """The check needs both halves. Names alone match nothing."""
-    (tmp_path / "vocab.zh_tw.json").write_text(
+    (tmp_path / "vocab.ja.json").write_text(
         json.dumps({"locale": "zh_tw", "items": [], "equipment": []}), encoding="utf-8")
-    assert DungeonHints.load(tmp_path / "vocab.zh_tw.json").check(2000, ["anything"]) == {}
+    assert DungeonHints.load(tmp_path / "vocab.ja.json").check(2000, ["anything"]) == {}
 
 
 # -- against the real data --------------------------------------------------------
-REAL_VOCAB = ROOT / "data" / "vocab.zh_tw.json"
+REAL_VOCAB = ROOT / "data" / "vocab.ja.json"
 REAL_CATALOG = ROOT / "data" / "catalog.zh_tw.json"
 
 

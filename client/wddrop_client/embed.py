@@ -476,3 +476,161 @@ class Recorder:
 
 
 _ZERO = __import__("datetime").timedelta(0)
+
+
+# -- the mining panel ------------------------------------------------------------------
+
+#: How much more ink than the matched name a row may carry before the name is treated as a
+#: PREFIX of something else rather than the thing itself.
+PANEL_MAX_INK_EXCESS_PX = 12
+#: A row scoring below this is not text at all — a highlight or a marker inside the panel
+#: band — and must not count as a line the reader failed on, or a complete panel looks partial.
+PANEL_ROW_IS_TEXT = 0.40
+#: Graded families (下級/中級/上級/特級) differ by ONE character, so the identical rest of the
+#: line drowns the difference and both candidates are refused. The tie-break re-scores over
+#: just the columns where they differ, and needs BOTH gates: the margin says which of the two
+#: fits better, not that either fits. A family of 111 精煉石（…）entries differing only in the
+#: digits produced a 0.108 margin between two readings that were both noise.
+MINING_TIE_MARGIN = 0.10
+MINING_TIE_MIN_SCORE = 0.60
+PANEL_SHIFTS = (range(-8, 5), range(-2, 3))
+
+
+@dataclass(frozen=True)
+class PanelItem:
+    name: str
+    quantity: int | None        # None is UNKNOWN, never a fabricated 1
+    score: float
+
+
+@dataclass(frozen=True)
+class PanelRead:
+    """One panel — one swing.
+
+    `unread` is the count of rows that looked like text and could not be named. It is the
+    number that decides whether this swing's content list is complete, so a caller recording
+    a swing records it too: a partial list that looks whole is the failure that hides longest.
+    """
+
+    items: list[PanelItem]
+    unread: int = 0
+    tie_broken: int = 0
+    broke: str | None = None    # see PanelReader.read
+
+
+class PanelReader:
+    """The mining panel, which is NOT the chest band and does not read like it.
+
+    Four differences, each of which cost a wrong reading before it was handled:
+
+    * the wording is 「 を入手した」, not 「を手に入れた!!」;
+    * the face is BaseFont, not the scenario face — measured 0.59-0.76 against 0.51-0.64;
+    * a panel has SEVERAL rows, and each is anchored inside the panel's own box. Anchoring a
+      row across the whole frame takes its origin from whatever the dungeon has lit at that
+      height, and at 1920x1080 that is most rows — three swings in one session came back with
+      the ore line missing and only the small stones recorded;
+    * its candidates are the vein pool, a few hundred names, not the whole vocabulary.
+
+    SIZE IS THE CALLER'S. It is not derived here and there is no default, because the drawn
+    size is platform-dependent: a 1080-wide phone draws this panel at 39 where the authored
+    size is 40, and the Windows factor for this prefab is unconfirmed. A caller that does not
+    know it should sweep a pixel either side and keep whichever reads — the asymmetry is the
+    same as everywhere else here, a size one pixel low reads nothing.
+    """
+
+    def __init__(self, names: list[str], atlas_path: str, size: int, *,
+                 columns: tuple[int, int], spacing: float = 0.0,
+                 after: str = " を入手した", prefix: str = "",
+                 quantity_mark: str = "×", min_score: float = 0.70,
+                 pickaxes: list[str] | None = None):
+        from .capture import glyph as g
+
+        self._g = g
+        self.size = size
+        self.columns = columns
+        self.after = after
+        self.prefix = prefix
+        self.quantity_mark = quantity_mark
+        self.min_score = min_score
+        window = g.required_window(
+            g.make_renderer(atlas_path, size, (2400, 90), spacing), prefix, names)
+        self._window = window
+        self._renderer = g.make_renderer(atlas_path, size, window, spacing)
+        self._index = g.RenderRecognizer(self._renderer, prefix, names)
+        # OPTIONAL, and off unless asked for. A break line reads correctly, but an index of a
+        # few candidates has almost nothing for a wrong answer to lose to: the same index
+        # reported a pickaxe breaking TWICE in a session containing no mining at all, and the
+        # true hit could not be separated by score — at a bar high enough to reject the false
+        # pair, the real break went too. A caller that counts breaks for itself should keep
+        # doing that and leave this empty.
+        self._pickaxes = list(pickaxes or [])
+        self._pickaxe_index = (g.RenderRecognizer(self._renderer, "", self._pickaxes)
+                               if self._pickaxes else None)
+
+    def read(self, frame_gray) -> PanelRead:
+        """One frame in, one panel out. Writes nothing, keeps nothing."""
+        import numpy as np
+
+        from .capture.panel import panel_rows
+
+        g = self._g
+        gray = np.asarray(frame_gray, dtype=float)
+        rows = panel_rows(gray, self.columns)
+        items: list[PanelItem] = []
+        unread = tie_broken = 0
+        broke = None
+
+        for row in rows:
+            win = g.anchor_window(gray, row, self._window, columns=self.columns)
+            if win is None:
+                continue
+            named, _cut = g.mask_after_name(win, self._renderer, self.after,
+                                            separator=self.quantity_mark)
+            match = self._index.recognize(named)
+            name = match.name
+            if name is not None and not self._row_is_the_name(named, match):
+                # The row carries far more ink than this name accounts for, so the name is a
+                # PREFIX of what is written there rather than the thing itself.
+                name = None
+            if name is None and self._pickaxe_index is not None:
+                hit = self._pickaxe_index.recognize(named)
+                if hit.name is not None:
+                    broke = hit.name
+                    continue
+            # ENTERED AT THE TIE-BREAK'S OWN BAR, not at the whole-line one. Gating entry
+            # at a HIGHER score than the tie-break accepts excludes exactly the band where
+            # ties happen: a graded family differs by one character in five, so the identical
+            # rest drowns it and the whole-line score lands BELOW the reading gate by
+            # construction. Measured on a real panel: 上級鉄鉱石 scored 0.6082 against its
+            # sibling 下級鉄鉱石 at a margin of 0.0189 — the right name, refused, and the
+            # mechanism built to resolve it never ran because 0.6082 < 0.70.
+            if (name is None and match.score >= MINING_TIE_MIN_SCORE
+                    and match.best and match.runner_up):
+                winner, margin, fit = g.break_tie(
+                    named, self._renderer, self.prefix, match.best, match.runner_up,
+                    shifts=PANEL_SHIFTS)
+                if margin >= MINING_TIE_MARGIN and fit >= MINING_TIE_MIN_SCORE:
+                    name, tie_broken = winner, tie_broken + 1
+            if not name:
+                if match.score >= PANEL_ROW_IS_TEXT:
+                    unread += 1
+                continue
+            qty, _margin = g.recognize_quantity(
+                win, self._renderer, self.prefix, name, self.after,
+                separator=self.quantity_mark)
+            items.append(PanelItem(name=name, quantity=qty, score=match.score))
+
+        return PanelRead(items=items, unread=unread, tie_broken=tie_broken, broke=broke)
+
+    def _row_is_the_name(self, named, match) -> bool:
+        """Does the ink left on this row amount to the name matched to it?
+
+        `mask_after_name` has already cut the row down to the name, so what remains should BE
+        the name. A row where it is not is one whose text merely STARTS with that name.
+        """
+        if not match.template_width:
+            return True
+        box = self._g.ink_bbox(named)
+        if box is None:
+            return True
+        return (box[2] - box[0]) - match.template_width <= PANEL_MAX_INK_EXCESS_PX

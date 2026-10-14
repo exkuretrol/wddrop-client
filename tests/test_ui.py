@@ -151,8 +151,8 @@ def _profile_for(frame_size, destination) -> bool:
         return False
     destination.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
     return True
-ATLAS = ROOT / "data" / "atlas.zh_tw.json"
-VOCAB = ROOT / "data" / "vocab.zh_tw.json"
+ATLAS = ROOT / "data" / "atlas.ja.json"
+VOCAB = ROOT / "data" / "vocab.ja.json"
 
 
 @pytest.mark.skipif(not (CAPTURE.is_dir() and ATLAS.exists() and VOCAB.exists() and PROFILES),
@@ -227,7 +227,7 @@ def test_start_refuses_until_a_dungeon_is_actually_chosen(app, home, monkeypatch
         {"id": 2000, "name": "初始的奈落", "floors": []},
         {"id": 7015, "name": "北穿幽靈城", "floors": []},
     ]}, ensure_ascii=False), encoding="utf-8")
-    for name in ("vocab.zh_tw.json", "atlas.zh_tw.json"):
+    for name in ("vocab.ja.json", "atlas.ja.json"):
         (tmp_path / name).write_text("{}", encoding="utf-8")
     # As the real one behaves: None when the file is not there. Returning a path regardless
     # made the fixture claim every locale's catalogue existed, which is the one thing this
