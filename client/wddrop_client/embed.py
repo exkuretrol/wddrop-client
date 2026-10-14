@@ -443,7 +443,9 @@ class Recorder:
         return self._event(contents, dive_id=dive_id, started_at=started_at,
                            occurred_at=occurred_at, dungeon_id=dungeon_id, floor_id=floor_id,
                            label_source=label_source, chest_index=chest_index, qc=qc,
-                           truncated=any(l.truncated for l in lines))
+                           # getattr for the same reason as `tie_broken` below: a caller's
+                           # own line type need not carry every field this one has grown.
+                           truncated=any(getattr(l, "truncated", False) for l in lines))
 
     @staticmethod
     def _item(line: DropLine) -> dict:
@@ -457,7 +459,14 @@ class Recorder:
             # from the other, `qty_unknown` would mean one thing for a player's rows and
             # another for a bot's, and the study pools them.
             item["qty_unknown"] = True
-        if line.tie_broken:
+        # getattr, NOT line.tie_broken. This recorder takes DUCK-TYPED lines — an embedder
+        # passes its own object, and the bot passes one that predates this field. Reading a
+        # new attribute directly makes every added field a hard break for every caller who is
+        # not watching these commits: the bot's next start would have raised AttributeError on
+        # its first chest and its watcher would have switched recording off for the run.
+        # Caught by wd-autopilot before a restart; the fix belongs here rather than in each
+        # caller, and the same rule applies to every field added after this one.
+        if getattr(line, "tie_broken", False):
             # THE FLAG REACHES THE WIRE, not just the reader. A tie-broken name was chosen on
             # the few columns where two candidates differ rather than on the whole line, so
             # `match_confidence` beside it is the WHOLE-LINE score — low by construction for a

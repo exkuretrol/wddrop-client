@@ -303,3 +303,31 @@ def test_the_flag_reaches_the_record_not_just_the_reader():
     from wddrop_client.embed import Recorder
 
     assert 'item["tie_broken"]' in inspect.getsource(Recorder._item)
+
+
+def test_the_recorder_takes_a_line_that_predates_its_newest_field(tmp_path):
+    """Adding a field must not break callers who pass their own line objects.
+
+    This recorder accepts duck-typed lines, so reading a new attribute directly turns every
+    added field into a hard break for every embedder not watching these commits. `tie_broken`
+    did exactly that: the bot passes its own line type, and its next start would have raised
+    AttributeError on the first chest, with its watcher switching recording off for the run.
+    Caught by wd-autopilot before a restart.
+    """
+    import json
+
+    from wddrop_client.embed import Recorder
+
+    class OldLine:                      # no tie_broken, as an older caller's line has none
+        name, quantity, score = "ランペール金貨", 2, 0.8891
+
+    rec = Recorder(spool=tmp_path / "spool.jsonl", records=tmp_path / "records.jsonl")
+    rec.open_dive(dungeon_id=7015).chest([OldLine()])
+
+    row = json.loads((tmp_path / "records.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert row["contents"][0]["item_name"] == "ランペール金貨"
+    assert "tie_broken" not in row["contents"][0], "absent means absent, not False"
+    # `truncated` was read the same way and had the same fault BEFORE tie_broken existed, so
+    # the contract was already narrower than it claimed. Fixing one and not the other would
+    # leave the next caller to find it.
+    assert row["truncated"] is False
