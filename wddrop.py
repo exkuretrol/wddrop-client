@@ -10,7 +10,7 @@
 #     # The wire format, shared with the server and pinned to a tag so both sides
 #     # speak a version somebody chose. It used to sit in packages/schema beside this
 #     # file; it is its own repository now.
-#     "wddrop-schema @ https://github.com/exkuretrol/wddrop-schema/archive/refs/tags/v0.2.0.tar.gz",
+#     "wddrop-schema @ https://github.com/exkuretrol/wddrop-schema/archive/refs/tags/v0.3.2.tar.gz",
 #     # Reading the game's own font out of the installation. Since 0.5.0 the atlas is not
 #     # shipped and is built on the player's machine instead, so without this the client
 #     # starts, says "UnityPy is not installed", and never gets an atlas — which reads as

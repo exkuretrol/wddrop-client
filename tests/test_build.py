@@ -174,3 +174,47 @@ def test_upx_is_decided_here_rather_than_by_the_runner_s_PATH():
     weight against an unsigned bundle already being called a trojan."""
     source = (ROOT / "build_exe.py").read_text(encoding="utf-8")
     assert '"--noupx"' in source
+
+
+def test_the_installed_wire_format_carries_every_field_the_client_writes():
+    """The two pins agreeing is not enough — they agreed on a tag four versions old.
+
+    AND THIS CHECKS WHAT IS INSTALLED, not what is pinned, because the installed one is what
+    runs. Found live: the client pinned v0.2.0, the bot's environment had resolved v0.2.0 from
+    it, and `uploader.py` round-trips every record through `DropEvent.model_validate` before
+    posting — so `tie_broken` was being dropped on the way to the wire while sitting correctly
+    in `records.jsonl`, and the endpoint answered 200. Bumping the pin does not fix a venv that
+    already resolved the old one, which is exactly why the assertion is on the import.
+
+    `test_a_dependency_no_index_can_resolve_carries_its_url` checks the build and the client
+    name the SAME tag, which stops them drifting apart. It cannot notice them being stale
+    together, and they were: both said v0.2.0 while the client had grown `tie_broken` and the
+    server had been deployed to store it.
+
+    What that would have shipped is the `label_source` failure in a public build. `ReceivedItem`
+    in v0.2.0 has no `tie_broken`, Pydantic drops unknown fields by default, and the endpoint
+    answers 200 — so a released exe would have sent records with the flag silently removed, and
+    nothing at either end would have said so.
+
+    So this asserts the thing that actually matters: every field the client puts on a content
+    line must EXIST on the model it is validated against.
+    """
+    from wddrop_schema.models import ReceivedItem
+
+    import re
+
+    pin = [l for l in (ROOT / "client" / "pyproject.toml").read_text(encoding="utf-8")
+           .splitlines() if "wddrop-schema @" in l]
+    assert pin, "the wire format is not pinned at all"
+    tag = re.search(r"/tags/(v[\d.]+)\.tar\.gz", pin[0])
+    assert tag, f"the pin names no tag: {pin[0]!r}"
+
+    from importlib.metadata import version
+    got = version("wddrop-schema")
+
+    # The fields the client's own recorder emits onto a content line.
+    for field in ("item_name", "quantity", "match_confidence", "tie_broken"):
+        assert field in ReceivedItem.model_fields, (
+            f"the client writes {field!r} but the INSTALLED wire format ({got}) has no such "
+            f"field, so the uploader would drop it in silence. The pin says {tag.group(1)}: "
+            f"if those disagree, this environment needs reinstalling, not the pin editing")
