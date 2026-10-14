@@ -123,6 +123,12 @@ class DropLine:
     score: float
     margin: float
     truncated: bool = False
+    #: The whole line was a near tie and this name won on the columns where the candidates
+    #: DIFFER. Reported because it is a different kind of reading: `score` is still the
+    #: whole-line one, which is low by construction for a family, and `margin` is the
+    #: tie-break's, not the index's. A caller recording quality should be able to tell the
+    #: two apart rather than see an unexplained 0.83 beside a 0.44 margin.
+    tie_broken: bool = False
 
 
 @dataclass(frozen=True)
@@ -226,6 +232,31 @@ class LineReader:
         match = self._index.recognize(named)
         score = float(getattr(match, "score", 0.0))
         margin = float(getattr(match, "margin", 0.0))
+        tie_broken = False
+        if (not getattr(match, "accepted", False) and score >= MINING_TIE_MIN_SCORE
+                and getattr(match, "best", None) and getattr(match, "runner_up", None)):
+            # THE TIE-BREAK THE STANDALONE CLIENT HAS HAD ALL ALONG, which this reader did
+            # not — so an embedding caller got a strictly weaker recogniser than the same
+            # library used by itself, and nothing said so. That is the drift this whole API
+            # exists to prevent, in the API itself.
+            #
+            # Junk comes in families differing by ONE character in seventeen
+            # (北穿の幽霊城の常なる/妖なる四鱗のガラクタ), so the identical rest drowns the
+            # difference and the ambiguity gate correctly refuses both. Re-scored over only
+            # the columns where the two candidates differ, the same frame separates cleanly:
+            # 0.8305 at a margin of 0.0254 becomes a margin of 0.4369 at a fit of 0.8909.
+            # Measured over 195 bot-read lines, this tier read ZERO times.
+            winner, tie_margin, fit = g.break_tie(
+                named, self._renderer, "", match.best, match.runner_up,
+                shifts=g.centred_shifts((0, 0), 1))
+            # BOTH gates. The margin says which of the two fits better, not that either fits
+            # at all: a family of 111 near-identical entries once produced a 0.108 margin
+            # between two readings that were both noise.
+            if tie_margin >= MINING_TIE_MARGIN and fit >= MINING_TIE_MIN_SCORE:
+                quantity, _qm = g.recognize_quantity(
+                    window, self._renderer, "", winner, self.after, self.quantity_mark)
+                return DropLine(name=winner, quantity=quantity, score=score,
+                                margin=tie_margin, tie_broken=True)
         if not getattr(match, "accepted", False):
             # Which gate it failed matters to the caller: a near-tie is a vocabulary problem
             # and can differ on the next frame, while a low score at a computed size is the
@@ -426,6 +457,17 @@ class Recorder:
             # from the other, `qty_unknown` would mean one thing for a player's rows and
             # another for a bot's, and the study pools them.
             item["qty_unknown"] = True
+        if line.tie_broken:
+            # THE FLAG REACHES THE WIRE, not just the reader. A tie-broken name was chosen on
+            # the few columns where two candidates differ rather than on the whole line, so
+            # `match_confidence` beside it is the WHOLE-LINE score — low by construction for a
+            # family, and misleading without this. Analysis that trusts confidence alone would
+            # rank these worst when they are among the most deliberate readings made.
+            #
+            # Written here because the last field that stopped at the client cost months:
+            # `label_source` rode the wire while the ingest ignored it, and before that
+            # `qty_unknown`, `stop_reason` and `truncated` were each set and dropped.
+            item["tie_broken"] = True
         return item
 
     def _event(self, contents: list, *, dive_id, started_at, occurred_at, dungeon_id,

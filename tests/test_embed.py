@@ -258,3 +258,48 @@ def test_break_detection_is_off_unless_the_caller_asks():
     from wddrop_client.embed import PanelReader
 
     assert inspect.signature(PanelReader.__init__).parameters["pickaxes"].default is None
+
+
+def test_the_embedded_reader_has_the_tie_break_the_standalone_one_has():
+    """The whole point of this API is that an embedding caller gets the SAME recogniser.
+
+    It did not. `break_tie` was wired into the standalone client's band path and never into
+    `LineReader`, so a bot calling this module ran a strictly weaker reader than the same
+    library used by itself, with nothing saying so. Measured: a junk family that differs by
+    one character in seventeen read ZERO times in 195 bot-read lines, and reads at a 0.44
+    margin once the tie-break is reached.
+    """
+    import inspect
+
+    from wddrop_client.embed import LineReader
+
+    src = inspect.getsource(LineReader.read)
+    assert "break_tie" in src, "LineReader must use the same tie-break as the runner"
+    assert "MINING_TIE_MARGIN" in src and "MINING_TIE_MIN_SCORE" in src, (
+        "both gates, or the margin says which of two fits better without either fitting")
+
+
+def test_a_tie_broken_reading_is_marked_as_one():
+    """`score` beside a tie-broken name is the WHOLE-LINE score, low by construction.
+
+    An unflagged tie-break would put 0.83 next to a 0.44 margin with no way to tell which
+    mechanism produced it, and analysis ranking on confidence would rate the most deliberate
+    readings worst.
+    """
+    import dataclasses
+
+    from wddrop_client.embed import DropLine
+
+    fields = {f.name for f in dataclasses.fields(DropLine)}
+    assert "tie_broken" in fields
+    assert DropLine("x", 1, 0.9, 0.1).tie_broken is False, "ordinary readings stay unflagged"
+
+
+def test_the_flag_reaches_the_record_not_just_the_reader():
+    """Four fields have been set by a client and dropped before reaching the database here —
+    `qty_unknown`, `stop_reason`, `truncated`, `label_source`. This one is written."""
+    import inspect
+
+    from wddrop_client.embed import Recorder
+
+    assert 'item["tie_broken"]' in inspect.getsource(Recorder._item)
