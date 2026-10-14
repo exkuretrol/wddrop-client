@@ -61,7 +61,10 @@ MIN_LINE_H, MAX_LINE_H = 12, 44
 # bounds LINES IN ONE PANEL, never how many times a vein may be worked: dig time is dynamic
 # and nothing here may cap the number of swings.
 MAX_LINES = 8
-INK_LEVEL = 150
+# THE BAND'S OWN THRESHOLD, imported rather than repeated. It was a second `= 150` here, with
+# nothing keeping the two in step: changing one would have left the panel and the message band
+# disagreeing about what counts as ink, silently and only on whichever surface was not tested.
+from .glyph import INK_LEVEL  # noqa: E402  (a constant, deliberately after the ones above)
 
 
 def _columns(arr, columns):

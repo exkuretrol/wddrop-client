@@ -63,7 +63,31 @@ from pathlib import Path
 
 log = logging.getLogger("wddrop.glyph")
 
-# Ink threshold for locating text against the dungeon behind it.
+# Ink threshold for locating text against the dungeon behind it. MEASURED, and narrower than
+# it looks — these are real frames, counting only the drop band:
+#
+#     population      background max   99.9th pct   TEXT, 5th pct of its lit pixels
+#     Pixel 9                    146          138                               151
+#     1600x900                   185          142                               153
+#     704x1241                   153          135                               154
+#
+# So the scene and the text very nearly touch. On the phone 150 separates them cleanly, by
+# four units. On Windows the background MAX is already above it, and what saves the reading
+# there is MIN_COLUMN_INK rather than this: a torch highlight lights single pixels, and a
+# column needs more than that to count as text.
+#
+# DO NOT MAKE THIS RELATIVE to the region's own brightness, which is the obvious improvement
+# and is wrong here. The digits do exactly that (see `_digit_ink_level`) because they are
+# measured inside a span already known to be text. This threshold's job is to FIND the text,
+# so it is applied where the scene is most of the pixels: at `max * 0.5` it would sit at 103
+# on the phone frames above and light 14% of the dungeon.
+#
+# It is also not generous. Text's dimmest lit pixels land at 151-154, so roughly the bottom
+# 5% of each glyph's anti-aliased edge is cut, and dropping to 120 nearly doubles the ink
+# recovered (3,388 px to 5,074 on one frame). That costs box WIDTH, not correlation — the
+# score is computed over the window, not the mask — so it shows up as an anchor a pixel out
+# rather than as an error. If the text is ever drawn dimmer than this (a coloured quantity,
+# a lower brightness setting) it will narrow the box silently rather than fail.
 INK_LEVEL = 150
 # Alignment search, in pixels, around the anchored origin.
 DX_RANGE = (-2, 7)

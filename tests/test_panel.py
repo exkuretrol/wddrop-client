@@ -720,3 +720,32 @@ def test_a_break_is_kept_where_verify_can_find_it():
     assert kept["dive"]["elapsed_seconds"] == 6
     assert kept["contents"][0]["item_name"] == "北穿の金のつるはし"
     assert kept["contents"][0]["source_frame"] == "episode-016/f_00025.png"
+
+
+def test_one_ink_threshold_not_two():
+    """The panel and the message band must agree on what counts as ink.
+
+    `panel.py` carried its own `INK_LEVEL = 150` with nothing keeping it in step with the
+    band's. Changing one would have left the two disagreeing, silently, and only on whichever
+    surface was not tested — the kind of fault that shows up as "the panel stopped reading" a
+    month later.
+    """
+    from wddrop_client.capture import glyph, panel
+
+    assert panel.INK_LEVEL is glyph.INK_LEVEL, "the panel must import the band's threshold"
+
+
+def test_the_ink_threshold_is_not_relative():
+    """Measured: making it relative is the obvious improvement and is wrong HERE.
+
+    The digits do use a relative level (`_digit_ink_level`), because they are measured inside
+    a span already known to be text. This threshold's job is to FIND text, so it is applied
+    where the dungeon is most of the pixels: at `max * 0.5` it lands near 103 on real phone
+    frames, where 14% of the BACKGROUND is brighter than that.
+    """
+    from wddrop_client.capture.glyph import DIGIT_INK_FLOOR, DIGIT_INK_FRACTION, INK_LEVEL
+
+    assert INK_LEVEL == 150
+    # The digit level stays relative, and its floor stays below the absolute one: the two
+    # answer different questions and must not be collapsed into one constant.
+    assert 0 < DIGIT_INK_FRACTION < 1 and DIGIT_INK_FLOOR < INK_LEVEL
