@@ -331,3 +331,48 @@ def test_the_recorder_takes_a_line_that_predates_its_newest_field(tmp_path):
     # the contract was already narrower than it claimed. Fixing one and not the other would
     # leave the next caller to find it.
     assert row["truncated"] is False
+
+
+def test_an_empty_chest_is_a_zero_only_when_the_game_said_so(tmp_path):
+    """An invented zero biases the drop rate as much as a dropped one, and is undetectable.
+
+    The game prints 「しかし、何も入っていなかった……」 for a chest that held nothing, so a
+    measured zero is one where that was READ. Everything else with no contents is a chest we
+    failed to read — and the two were arriving identically.
+
+    Found on a real record: a TRAP chest printed 「おおっと!」 and the trap's name, neither of
+    which is an item, so both lines were refused and the chest reached the server as
+    `contents: []`, `truncated: false` — indistinguishable from a chest that gave nothing. The
+    empty class is the bottom of the distribution the study exists to measure.
+    """
+    import json
+
+    from wddrop_client.embed import DropLine, Recorder
+
+    rec = Recorder(spool=tmp_path / "s.jsonl", records=tmp_path / "r.jsonl")
+    dive = rec.open_dive(dungeon_id=7015)
+    dive.chest([], unread=1)                                  # the trap
+    dive.chest([], empty_confirmed=True)                      # the game said so
+    dive.chest([DropLine("ランペール金貨", 2, 0.89, 0.4)])      # ordinary
+
+    rows = [json.loads(l) for l in
+            (tmp_path / "r.jsonl").read_text(encoding="utf-8").splitlines()]
+    trap, empty, ordinary = rows
+
+    assert trap["truncated"] is True, "an unread chest must not pass as a measured zero"
+    assert trap["qc"]["empty_unconfirmed"] is True
+    assert empty["truncated"] is False and empty["contents"] == [], "a confirmed zero is real"
+    assert "empty_unconfirmed" not in empty["qc"]
+    assert ordinary["truncated"] is False and len(ordinary["contents"]) == 1
+
+
+def test_a_confirmed_empty_chest_cannot_also_have_contents(tmp_path):
+    """The game cannot have said both, so a caller claiming both has a bug upstream."""
+    import pytest
+
+    from wddrop_client.embed import DropLine, Recorder
+
+    rec = Recorder(spool=tmp_path / "s.jsonl", records=tmp_path / "r.jsonl")
+    dive = rec.open_dive(dungeon_id=7015)
+    with pytest.raises(ValueError):
+        dive.chest([DropLine("ランペール金貨", 1, 0.9, 0.4)], empty_confirmed=True)

@@ -302,7 +302,7 @@ class DiveHandle:
 
     def chest(self, lines: "list[DropLine]", *, floor_id: int | None = None,
               unread: int = 0, occurred_at: datetime | None = None,
-              qc: dict | None = None) -> str:
+              qc: dict | None = None, empty_confirmed: bool = False) -> str:
         """Write ONE chest, with everything it showed. Returns its event_id.
 
         TAKES A LIST BECAUSE A CHEST IS THE UNIT, NOT A LINE. One chest can print several
@@ -315,8 +315,20 @@ class DiveHandle:
         not a lost record, it is a WRONG one: it would inflate the chest count, deflate the
         items-per-chest, and do it silently, in the two quantities the study exists to measure.
 
-        An empty list is valid and means a chest that yielded nothing. That is a real outcome
-        and dropping it would bias the very rate being measured.
+        AN EMPTY LIST IS NOT BY ITSELF A ZERO, and this is the one place where getting it
+        wrong is worst. A chest that yielded nothing is a real outcome and the BOTTOM of the
+        distribution, so dropping it would bias the rate being measured — but inventing one
+        biases it the same amount the other way, and nothing downstream can tell the two apart.
+
+        The game SAYS when a chest was empty (「しかし、何も入っていなかった……」), so a zero is
+        only a zero when that message was read: pass `empty_confirmed=True`, which is what
+        `LineReader` returning `EmptyChest` means. Without it an empty list records a chest
+        whose contents are UNKNOWN — `truncated`, not a measured nothing.
+
+        Found on a real record: a TRAP chest printed 「おおっと!」 and the trap's name, neither
+        of which is an item, so the reader refused both lines and the chest arrived with no
+        contents, `truncated` false, `unread_lines` 1. On the server that is indistinguishable
+        from a chest that genuinely gave nothing.
 
         `floor_id` IS PER CHEST, not per dive. A dive crosses floors — down to the farm floor,
         then past others on the way out — and drop tables are keyed per floor, so a dive-level
@@ -335,8 +347,18 @@ class DiveHandle:
         marks = dict(qc or {})
         if unread:
             marks["unread_lines"] = int(unread)
+        rows = list(lines)
+        # A ZERO ONLY WHEN THE GAME SAID SO. Anything else with no contents is a chest we did
+        # not read, and `truncated` is what says so — the same flag a session ending mid-chest
+        # sets, for the same reason: the analysis must be able to exclude it on evidence.
+        incomplete = not rows and not empty_confirmed
+        if incomplete:
+            marks["empty_unconfirmed"] = True
+        if empty_confirmed and rows:
+            raise ValueError("empty_confirmed with contents: the game cannot have said both")
         event = self._recorder.build_event(
-            list(lines), dive_id=self.dive_id, started_at=self.started_at, occurred_at=now,
+            rows, dive_id=self.dive_id, started_at=self.started_at, occurred_at=now,
+            force_truncated=incomplete,
             dungeon_id=self.dungeon_id,
             floor_id=self.floor_id if floor_id is None else floor_id,
             label_source=self.label_source, chest_index=self._chests, qc=marks)
@@ -434,7 +456,8 @@ class Recorder:
 
     def build_event(self, lines: "list[DropLine]", *, dive_id: str, started_at: datetime,
                     occurred_at: datetime, dungeon_id, floor_id, label_source: str,
-                    chest_index: int, qc: dict | None = None) -> dict:
+                    chest_index: int, qc: dict | None = None,
+                    force_truncated: bool = False) -> dict:
         from .config import CLIENT_VERSION
 
         contents = []
@@ -445,7 +468,11 @@ class Recorder:
                            label_source=label_source, chest_index=chest_index, qc=qc,
                            # getattr for the same reason as `tie_broken` below: a caller's
                            # own line type need not carry every field this one has grown.
-                           truncated=any(getattr(l, "truncated", False) for l in lines))
+                           # `force_truncated` carries the caller's judgement that the LIST
+                           # is short even though no single line was: an empty chest nobody
+                           # confirmed is the case, and it has no lines to carry the flag.
+                           truncated=(force_truncated
+                                      or any(getattr(l, "truncated", False) for l in lines)))
 
     @staticmethod
     def _item(line: DropLine) -> dict:
