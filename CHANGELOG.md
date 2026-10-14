@@ -21,7 +21,7 @@ the editing is what players read.
 
 Nothing yet.
 
-## [0.9.4] - 2026-10-14
+## [0.9.4] - 2026-10-15
 
 **A window size nobody calibrated is no longer a dead end.** Until now the client could read
 three window sizes and refused every other one, telling the player to change the game's
@@ -41,14 +41,48 @@ cannot play at this size".
 - **Geometry computed from the window size**, for any size without a measured fit. The
   message band's position and the columns it is written in come out of it directly.
 
+### Changed
+
+- **The item list is rebuilt from game 1.37.0.** The old one was built in September, so
+  everything added to the game since was unreadable — and worse than unreadable in a few cases:
+  the list is a closed set and a name NOT in it can still be recorded as the nearest one that
+  is. A real example, measured: 吹雪の巻物 scored 0.797 against 防壁の巻物, past the score the
+  client requires, and was refused only because the second-best was close enough to look
+  doubtful. **If you recorded between September and now, items from newer content may be
+  missing from your records, and a few may carry the wrong name.** The reader itself did not
+  change; the list it reads against did.
+
+- **Names that differ by one or two characters are now told apart on the characters that
+  differ**, rather than on the whole line where the shared part drowns them out. 常なる and
+  妖なる in the long junk names were the case that forced it.
+
+### Fixed
+
+- **A drop line that wraps mid-sentence is read to its end.** A long name could wrap with no
+  quantity after it, and the second line was then read as though it were the start of another
+  item.
+- **An empty chest is recorded as empty only when the game said it was empty.** A TRAP chest
+  prints 「おおっと!」 and the trap's name — neither is an item, so both lines were refused and
+  the chest was stored as one that gave nothing. A chest that holds nothing is a real result and
+  the bottom of the very rate this records, so inventing one is as damaging as losing one.
+  Such a chest is now marked incomplete instead. **Records written before this version may
+  contain chests shown as empty that were merely unreadable**, and they cannot be told apart
+  after the fact — only a chest recorded from this version on carries the distinction.
+- **The font used for matching is the one the game draws the drop message in.** Using the wrong
+  face lowers every score slightly, which looks like nothing until the hardest names stop being
+  accepted at all.
+
 ### Known limits
 
-- **The text SIZE is computed too, and it is the part with the least behind it.** The size that
-  reads is about half a pixel over the size drawn, because anti-aliasing widens ink at both
-  ends, so the computed value has that half pixel added before it is rounded. That matches all
-  four sizes anyone has measured, across two platforms. **A size one pixel out reads nothing at
-  all** — not fewer items, none: at a pixel under, twelve real lines scored 0.37 with none
-  accepted, where the right size took all twelve at 0.87.
+- **The text SIZE is computed too, and it is the part with the least behind it.** The
+  arithmetic adds one before rounding, and it matches all four sizes anyone has measured across
+  two platforms — but it is a fit to four points and no more than that. An explanation was
+  offered here before (anti-aliasing widening ink by half a pixel at each end); it was
+  WITHDRAWN, because the gap it was supposed to describe does not even keep the same sign
+  across those four points. The arithmetic stands on its own evidence; the story did not.
+- **A size one pixel out reads nothing at all** — not fewer items, none. At a pixel under,
+  twelve real lines scored 0.37 with none accepted, where the right size took all twelve at
+  0.87. That asymmetry is the whole reason the rounding leans the way it does.
 - So if a newly supported window size records nothing, the size is the thing to doubt, not the
   position. Four points is not a law, and a fifth could land the other way. The sizes that were
   measured by hand keep their measured fits and are unaffected either way.
