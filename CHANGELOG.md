@@ -21,6 +21,35 @@ the editing is what players read.
 
 Nothing yet.
 
+## [0.9.5] - 2026-10-21
+
+**A field your records carry was being thrown away before they were sent.** When two item names
+differ by only a character or two, the reader decides between them on the characters that
+differ and marks the record to say so — that mark is what tells anyone reading the data later
+how confident a name was. It was being discarded on the way out: the client was built against a
+wire format four versions old, which had no place to put it, and the part of the library that
+drops anything it does not recognise did so without a word. The server accepted the records and
+answered normally, so nothing anywhere reported a problem.
+
+Records already on your disk are unaffected — they always held the real value. Only what was
+uploaded lost it, and only for that field.
+
+### Fixed
+
+- **The wire format the client is built against is current again.** It was pinned in two
+  places, both stale, and a guard that checked the two against each OTHER could not see them
+  being wrong together. The guard now checks what is actually installed against the fields the
+  client writes.
+
+### Added
+
+- **`accept_consent` / `consented` / `revoke_consent`**, for a program that embeds this client
+  and does its own asking. Nothing changes for anyone using the window or the command line.
+  `accept_consent` takes the disclaimer text that was actually shown and refuses to record
+  agreement to anything else, so a host displaying stale wording cannot record consent against
+  the current terms.
+
+
 ## [0.9.4] - 2026-10-15
 
 **A window size nobody calibrated is no longer a dead end.** Until now the client could read
