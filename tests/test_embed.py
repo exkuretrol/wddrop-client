@@ -376,3 +376,65 @@ def test_a_confirmed_empty_chest_cannot_also_have_contents(tmp_path):
     dive = rec.open_dive(dungeon_id=7015)
     with pytest.raises(ValueError):
         dive.chest([DropLine("ランペール金貨", 1, 0.9, 0.4)], empty_confirmed=True)
+
+
+def test_consent_recorded_through_the_api_lets_a_drain_run(tmp_path, monkeypatch):
+    """The whole point: the drain must SEE what the host recorded.
+
+    wd-autopilot asked its own consent question, got a yes, and wrote the right hash into its
+    own `consent.json`. The drain reads `ClientConfig.consent` from the data_dir and refused
+    about fifty times with `ConsentRequired` while the records piled up in the spool. The two
+    sides never disagreed about the answer — they disagreed about where it lived.
+
+    So this asserts the join, not the parts: record through the API, then drain, and the
+    refusal must be gone. Uploading itself is stubbed out; what is under test is consent.
+    """
+    from wddrop_client import uploader
+    from wddrop_client.consent import disclaimer_text
+    from wddrop_client.embed import Recorder, accept_consent, consented
+
+    rec = Recorder(capture_mode="autopilot", locale="ja", data_dir=tmp_path)
+    assert consented(tmp_path) is False
+    before = rec.drain()
+    assert "ConsentRequired" in str(before.get("error", "")), before
+
+    accept_consent(tmp_path, shown_text=disclaimer_text())
+    assert consented(tmp_path) is True
+
+    sent = []
+    monkeypatch.setattr(uploader, "upload_spool",
+                        lambda *a, **k: sent.append(1) or
+                        {"uploaded": 0, "remaining": 0, "rejected": 0, "held": 0})
+    after = Recorder(capture_mode="autopilot", locale="ja", data_dir=tmp_path).drain()
+    assert "ConsentRequired" not in str(after.get("error", "")), after
+    assert sent, "the drain must have reached the uploader once consent was recorded"
+
+
+def test_consent_cannot_be_recorded_for_a_disclaimer_that_was_not_shown(tmp_path):
+    """`accept_consent` takes the TEXT, not a boolean, and this is why.
+
+    Nothing in a library can verify that a human was asked — that honesty belongs to the
+    caller. What it CAN refuse is a record of consent for wording this client would not show:
+    a host that cached the disclaimer from an older version and displayed that got agreement
+    to something other than what is current. Passing the text catches it; a bare
+    `accept_consent(data_dir)` could not.
+    """
+    import pytest
+
+    from wddrop_client.consent import disclaimer_text
+    from wddrop_client.embed import accept_consent, consented
+
+    with pytest.raises(ValueError):
+        accept_consent(tmp_path, shown_text=disclaimer_text() + "\n(and one extra clause)")
+    assert consented(tmp_path) is False, "a refused acceptance must record nothing"
+
+
+def test_consent_can_be_withdrawn(tmp_path):
+    """An API that can only say yes is not a consent API."""
+    from wddrop_client.consent import disclaimer_text
+    from wddrop_client.embed import accept_consent, consented, revoke_consent
+
+    accept_consent(tmp_path, shown_text=disclaimer_text())
+    assert consented(tmp_path) is True
+    revoke_consent(tmp_path)
+    assert consented(tmp_path) is False

@@ -712,3 +712,75 @@ class PanelReader:
         if box is None:
             return True
         return (box[2] - box[0]) - match.template_width <= PANEL_MAX_INK_EXCESS_PX
+
+
+# -- consent, for a host that does its own asking ------------------------------------
+#
+# WHY THIS EXISTS AT ALL. A bot shows the disclaimer itself, in its own prompt, and then has
+# nowhere to put the answer: `cmd_consent` records it but also OWNS the asking, and the drain
+# reads `ClientConfig.consent` rather than anything a host can write. wd-autopilot wrote its
+# own `consent.json` instead, with the right hash in it, and every drain still refused —
+# roughly 50 of them — because the client never reads that file. The records were spooled and
+# safe, but nothing was going anywhere.
+#
+# WHAT THESE DELIBERATELY DO NOT DO. Neither function asks a human anything, and nothing here
+# can verify that one was asked. That limit is real and worth stating plainly rather than
+# dressing up: `accept_consent` is a RECORDING api, and the honesty of the record is the
+# caller's responsibility. What it can do is refuse to record consent for a disclaimer the
+# caller did not actually show, which is why it takes the TEXT and not a boolean or a hash.
+# A host that cached the wording from an older version and showed that is the realistic
+# failure — the player then agreed to something other than what is current — and passing the
+# text is what catches it. A bare `accept_consent(data_dir)` could not.
+
+
+def accept_consent(data_dir, *, shown_text: str) -> str:
+    """Record that a human accepted `shown_text`, which must BE the current disclaimer.
+
+    Returns the hash recorded. Raises `ValueError` if `shown_text` is not the disclaimer this
+    client would show, because then the agreement on record is not the agreement that was
+    given.
+
+        from wddrop_client.consent import disclaimer_text
+        text = disclaimer_text()
+        print(text)                      # the host does its own asking
+        if asked_the_human_and_they_said_yes:
+            accept_consent(data_dir, shown_text=text)
+
+    `asked_sharing` is set for the same reason `cmd_consent` sets it: a host that consents
+    without ever opening the window would otherwise leave it False for ever.
+    """
+    from .config import ClientConfig
+    from .consent import disclaimer_hash, disclaimer_text
+
+    if shown_text != disclaimer_text():
+        raise ValueError(
+            "shown_text is not this client's current disclaimer — the text a human agreed to "
+            "must be the text on record. Show `consent.disclaimer_text()` and pass that.")
+    base = Path(data_dir) if data_dir is not None else None
+    cfg = ClientConfig.load(directory=base)
+    cfg.consent.accepted_hash = disclaimer_hash()
+    cfg.asked_sharing = True
+    cfg.save(directory=base)
+    return cfg.consent.accepted_hash
+
+
+def consented(data_dir) -> bool:
+    """Whether a drain from this `data_dir` would be allowed — the drain's own question.
+
+    `ConsentState.general_ok`, not "is there a hash": consent is tied to the wording it was
+    given for, so it LAPSES when the disclaimer changes and must be asked again.
+    """
+    from .config import ClientConfig
+
+    cfg = ClientConfig.load(directory=Path(data_dir) if data_dir is not None else None)
+    return bool(cfg.consent.general_ok)
+
+
+def revoke_consent(data_dir) -> None:
+    """Withdraw it. Here because an API that can only say yes is not a consent API."""
+    from .config import ClientConfig
+
+    base = Path(data_dir) if data_dir is not None else None
+    cfg = ClientConfig.load(directory=base)
+    cfg.consent.accepted_hash = None
+    cfg.save(directory=base)
